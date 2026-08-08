@@ -127,99 +127,120 @@ having to guess whether `git pull` + rebuild actually landed.
   `libgl1`/`libegl1` alone are not enough; this was a real missing-package
   bug that produced a generic "unknown libva error").
 
-### Rendering speed investigation (unresolved, context for next time)
+### Rendering speed investigation (exhausted the cheap levers -- read this before trying again)
 
-Bottom line so far: **CPU rendering (llvmpipe) and "GPU rendering + VAAPI
-encode" both land around 0.8-0.92x realtime on the RX 570 worker** --
-switching encoders/pixel-format didn't move the needle at all, which ruled
-out the encoder as the bottleneck. Lowering resolution gave a genuine ~4x
-speedup, proving it's throughput-bound (proportional to pixel count), not a
-fixed per-frame latency cost.
+**Bottom line, as of this writing: ~0.85-0.94x realtime on the RX 570
+worker, regardless of which of the below is tried.** Every low-risk,
+config/environment-level lever has now been tested and ruled out. A real
+fix from here means either actual GPU profiling tooling (not available in
+this environment) or real Go changes to danser-go's internals, with no
+guarantee of payoff. Don't re-try any of the ruled-out items below without
+new evidence -- this list is the accumulated result of a full day's
+investigation, not a guess.
 
-Current best explanation: VirtualGL's mandatory per-frame frame-transport
-copy (GPU → the fake Xvfb window danser renders into) is the dominant cost,
-on top of danser's own separate pixel readback for the ffmpeg pipe. This is
-architecturally why o!rdr's own worker boxes are so much faster on similar
-hardware -- **o!rdr's client explicitly refuses to run without a real
-physical display connected** (confirmed in their own source,
-`MasterIO02/ordr-client`), meaning their danser renders natively with zero
-bridging, no VirtualGL needed at all.
+**Confirmed NOT the bottleneck (all tested live, in this order):**
 
-**Current status (in progress):** user doesn't have physical access to the
-`.115` box, so instead of a physical HDMI/DP dummy plug (~$10, the
-originally discussed fix), we're doing the software equivalent -- forcing
-a real HDMI/DVI/DP connector "connected"
-at the kernel level via a `video=<connector>:D` boot parameter in the VM
-guest's GRUB config (capital `D` forces the connector on with a default
-mode even with no EDID/monitor detected). This is a *different* mechanism
-than the `amdgpu.virtual_display=` route rejected below -- it drives the
-GPU's real output hardware for real, just skips the physical
-plug-detection handshake, and (unlike `virtual_display=`) works reliably
-for HDMI/DVI specifically because TMDS is purely source-driven with no
-handshake required (DisplayPort needs real electrical AUX-channel link
-training a software force can't fake, which is exactly why physical DP
-dummy plugs exist).
+1. **Encoder/pixel-format choice** -- CPU (llvmpipe) and GPU+VAAPI both
+   land at the same ~0.8-0.92x; switching didn't move the needle.
+2. **Resolution is NOT irrelevant** -- lowering it gave a genuine ~4x
+   speedup, proving the cost is throughput-bound (proportional to pixel
+   count), not a fixed per-frame latency. This is the one lever that
+   *does* work, it's just a quality tradeoff, not a fix.
+3. **VirtualGL's GPU->Xvfb frame-transport bridging.** Originally the
+   leading theory (and why o!rdr's own client refuses to run without a
+   real physical display -- see `MasterIO02/ordr-client` -- avoiding this
+   exact bridging). Tested by getting danser to render *natively* against
+   a real Xorg server with zero VirtualGL in the loop (see "Xorg native
+   rendering path" below) -- **result: identical speed.** This ruled out
+   the bridging as the dominant cost, contrary to the original hypothesis.
+4. **Naive/blocking pixel readback.** Read danser-go's actual source
+   (`app/ffmpeg/video.go`) expecting to find a synchronous
+   `glReadPixels`-and-block pattern that a double-buffered PBO patch could
+   fix cheaply. It's already far more sophisticated than that: a
+   `MaxVideoBuffers = 10` pool of persistent-mapped PBOs, `FenceSync` +
+   non-blocking `gl.Flush()` per frame, and a separate goroutine draining
+   completed frames to the ffmpeg pipe. The "add async readback" fix does
+   not exist to be made -- it's already there.
+5. **An artificial FPS cap.** `settings.Recording.EncodingFPSCap` could in
+   principle throttle rendering to exactly the target output fps, which
+   would make ~0.9x meaningless as a "how fast could this go" measurement.
+   Checked danser-go's source: defaults to `0` (uncapped,
+   `frame.Limiter.Sync()` is a no-op at `fps <= 0`), and this project never
+   sets it. Ruled out.
+6. **GPU power-state/DPM scaling.** The GPU's `gpu_busy_percent` oscillates
+   sharply between 0 and 100 during rendering -- looked like confirmation
+   of a serialized render/readback pipeline at first, until the user noted
+   **this GPU has always oscillated like this, even pre-Proxmox, suspected
+   firmware/voltage issue.** Tested directly: forced
+   `power_dpm_force_performance_level=high` (pins the clock at its top
+   state, 1284MHz, confirmed via `pp_dpm_sclk`, disabling dynamic
+   scaling) -- **the 0/100 oscillation persisted identically, and render
+   speed was unchanged (still 0.22x at 1440p144).** Rules out DPM/clock
+   scaling as the cause of either the oscillation or the speed ceiling.
 
-Applying the grub edit alone does **not** by itself change render speed --
-confirmed live: a render run immediately after was still ~0.2x realtime at
-2560x1440@144, matching the *same* per-pixel throughput as the pre-edit
-baseline (0.85x-ish at a lower res, scaled linearly for pixel count per
-the throughput-bound finding above). Root cause: `docker/worker-entrypoint.sh`
-unconditionally started Xvfb + VirtualGL regardless of connector status --
-forcing the connector "connected" is a prerequisite for the real fix, not
-the fix itself, since nothing was pointed at that connector yet.
+**What the oscillation most likely is, given all of the above:** not a
+power-management artifact (ruled out #6), not blocking readback (ruled
+out #4) -- most likely genuine bursty GPU/CPU handoff in danser's main
+render loop itself: the *readback* is pipelined/async, but nothing found
+so far suggests danser pipelines the *rendering* of frame N+1 while frame
+N is still being processed by the GPU. If true, real fix = restructuring
+danser-go's render loop for frame-ahead pipelining -- a much deeper,
+riskier change than anything else tried, unconfirmed without actual
+profiling (e.g. `radeontop`, Mesa GPU frame-time instrumentation -- none
+installed/available in this environment) to know where time is actually
+going before touching code.
 
-**`docker/worker-entrypoint.sh` now supports `WORKER_DISPLAY_MODE=xorg`**
-(opt-in, default remains `xvfb-vgl`) -- starts a real Xorg server against
-the amdgpu DDX driver (`docker/xorg-worker.conf`) instead of Xvfb, skips
-VirtualGL entirely (`USE_VIRTUALGL` unset -> `lib/danser.js` runs danser
-directly), so danser's GLX calls go straight to Xorg, straight to the GPU.
-Also added: `xserver-xorg-core`/`xserver-xorg-video-amdgpu` in the
-Dockerfile, an `/etc/X11/Xwrapper.config` override (Xorg.wrap otherwise
-refuses to start without a real console session), `/dev/tty7` passed
-through in `docker-compose.worker.yml` (Xorg pinned to VT 7 explicitly --
-letting it auto-pick defaults to VT 1, the host's real login console,
-worth avoiding outright), and an explicit `BusID "PCI:0:16:0"` in
-`xorg-worker.conf` (this box has two PCI display devices -- Proxmox's own
-emulated Bochs/QEMU VGA console *and* the real GPU -- and an unconfigured
-Device section falls back toward the "primary" one, which is the Bochs
-device, producing "no screens found").
+**Xorg native rendering path** (built and proven working as infrastructure,
+even though it didn't fix speed): `docker/worker-entrypoint.sh` supports
+`WORKER_DISPLAY_MODE=xorg` (opt-in; **the deployed default is back to
+`xvfb-vgl`** after this investigation, decided by the user once the Xorg
+path was confirmed to be a non-win -- same speed either way, `xvfb-vgl` is
+simpler/more proven). Starts a real Xorg server against the amdgpu DDX
+driver (`docker/xorg-worker.conf`) instead of Xvfb, skips VirtualGL
+entirely (`USE_VIRTUALGL` unset -> `lib/danser.js` runs danser directly).
+Needs, all live-verified working on `.115`:
+- A connector forced "connected" at the kernel level: `video=HDMI-A-1:D`
+  boot param in the worker VM's GRUB config (software equivalent of a
+  physical HDMI dummy plug, since the user didn't have physical access to
+  the box -- works reliably for HDMI/DVI specifically because TMDS is
+  purely source-driven with no handshake required, unlike DisplayPort
+  which needs real electrical AUX-channel link training a software force
+  can't fake).
+- `xserver-xorg-core`/`xserver-xorg-video-amdgpu` in the Dockerfile, plus
+  an `/etc/X11/Xwrapper.config` override (`allowed_users=anybody`) since
+  Xorg.wrap otherwise refuses to start without a real console session.
+- Xorg pinned to **VT 7** explicitly (`/dev/tty7` passed through in
+  `docker-compose.worker.yml`) -- letting it auto-pick defaults to VT 1,
+  the host's *real* login console, worth avoiding outright rather than
+  fighting over it.
+- Explicit `BusID "PCI:0:16:0"` in `xorg-worker.conf` -- this box has two
+  PCI display devices (Proxmox's own emulated Bochs/QEMU VGA console *and*
+  the real GPU), and an unconfigured Device section falls back toward the
+  "primary" one (the Bochs device), producing "no screens found" without
+  this.
+- Confirmed live: `GL Renderer: AMD Radeon RX 570 Series (polaris10, ...)`
+  in the worker's log, genuine native hardware GL, full job completed and
+  uploaded successfully. **Then confirmed to be the same speed as
+  `xvfb-vgl` (~0.9x), and reverted to `xvfb-vgl` as the deployed config**
+  -- the Xorg code all stays in the repo, proven working, in case it's
+  ever useful again (e.g. if VirtualGL turns out to matter more at
+  different resolutions/settings than tested here).
 
-**LIVE-VERIFIED working as of the commit after `d5b04e9`:** confirmed via
-the worker's own log --
-`GL Renderer: AMD Radeon RX 570 Series (polaris10, ...)` -- genuine native
-hardware GL, zero VirtualGL, full job completed and uploaded successfully.
-
-**But it did not improve render speed at all** -- ~0.90-0.94x realtime at
-1080p60, essentially identical to the old Xvfb+VirtualGL baseline
-(0.8-0.92x). This is the important negative result: **VirtualGL's
-frame-copy bridging was not actually the dominant bottleneck** --
-something that scales with pixel count is capping *both* paths equally,
-since removing VirtualGL from the pipeline entirely changed nothing.
-
-Leading suspect now: danser's own pixel readback from the GPU before
-handing frames to ffmpeg (mentioned above, "on top of danser's own
-separate pixel readback for the ffmpeg pipe") -- that step is identical
-in both configurations, which would fully explain this result. Fixing
-that for real means restructuring how danser gets pixels to the encoder
-(e.g. a zero-copy GPU->VAAPI handoff via DMA-BUF instead of a CPU-side
-readback+reupload round-trip), not just swapping the display backend --
-real Go source changes to danser-go's rendering/encode-handoff path, a
-bigger lift than originally scoped as "patch for headless EGL/GBM." Not
-started.
-
-Given the Xorg path is now proven not to be a speed win, whether to keep
-`WORKER_DISPLAY_MODE=xorg` as the deployed default (one less moving part,
-no VirtualGL dependency, but more fragile container/VT/BusID setup) vs.
-reverting to `xvfb-vgl` (simpler, proven, same speed either way) is an
-open decision -- ask the user rather than assuming either way next time
-this comes up.
+**Realistic options from here, none started:**
+1. Accept ~0.85-0.94x as the practical ceiling for this GPU/software combo.
+2. Lower default render resolution/fps -- the only lever proven to help
+   (~4x per resolution), zero engineering, real quality tradeoff.
+3. Get actual profiling on the box before touching any more code --
+   otherwise further changes are still guessing.
+4. Real danser-go render-loop pipelining surgery -- biggest lift, most
+   uncertain payoff, don't start this blind.
 
 A software-only "virtual display via `amdgpu.virtual_display=<PCI-ID>,1`
-kernel parameter" route was investigated and rejected: it requires a VM
-kernel boot parameter (not container-level), plus real DRM-master/TTY
-session permission issues that forum reports describe as unreliable even
-when configured "correctly." The dummy plug avoids all of that.
+kernel parameter" route was investigated early on and rejected before any
+of the above: it requires a VM kernel boot parameter (not
+container-level), plus real DRM-master/TTY session permission issues that
+forum reports describe as unreliable even when configured "correctly."
+The `video=<connector>:D` approach actually used avoids all of that.
 
 ## Zipline integration -- debugging history (read before touching `lib/ziplineClient.js` again)
 
