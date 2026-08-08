@@ -39,8 +39,13 @@ export DISPLAY="${DISPLAY:-:99}"
 DISPLAY_MODE="${WORKER_DISPLAY_MODE:-xvfb-vgl}"
 
 if [ "$DISPLAY_MODE" = "xorg" ]; then
-  echo "Starting Xorg (WORKER_DISPLAY_MODE=xorg) on $DISPLAY ..."
-  Xorg "$DISPLAY" -config /app/xorg-worker.conf -noreset -nolisten tcp -novtswitch -sharevts -logfile /tmp/xorg-worker.log &
+  echo "Starting Xorg (WORKER_DISPLAY_MODE=xorg) on $DISPLAY, VT 7 ..."
+  # Pinned to VT 7 (the conventional "X session" VT) rather than letting
+  # Xorg auto-pick -- it defaults to VT 1, which is normally the host's
+  # real login console (a getty usually runs there), and fighting the real
+  # host console over the same VT is worth avoiding entirely. Needs
+  # /dev/tty7 passed through in docker-compose.worker.yml's `devices:`.
+  Xorg "$DISPLAY" vt7 -config /app/xorg-worker.conf -noreset -nolisten tcp -novtswitch -sharevts -logfile /tmp/xorg-worker.log &
   DISPLAY_PID=$!
   unset USE_VIRTUALGL
 else

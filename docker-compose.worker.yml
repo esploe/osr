@@ -19,9 +19,14 @@
 # WORKER_DISPLAY_MODE=xorg (optional, see docker/worker-entrypoint.sh) runs
 # danser against a real Xorg server on the GPU's actual output instead of
 # Xvfb+VirtualGL -- needs a connector forced "connected" at the kernel level
-# first (video=<connector>:D boot param on this VM). /dev/tty0 is passed
-# through below for Xorg's VT access in that mode; if Xorg still fails to
-# grab DRM master, check /tmp/xorg-worker.log inside the container.
+# first (video=<connector>:D boot param on this VM). Xorg is pinned to VT 7
+# (the conventional "X session" VT, see worker-entrypoint.sh) rather than
+# letting it auto-pick VT 1 -- VT 1 is normally the host's real login
+# console (a getty usually runs there), and Xorg fighting the real host
+# console over the same VT is worth avoiding entirely, not just handling.
+# /dev/tty7 is passed through below for Xorg's VT access in that mode; if
+# Xorg still fails to grab DRM master, check /tmp/xorg-worker.log inside
+# the container.
 
 services:
   worker:
@@ -36,7 +41,7 @@ services:
       - DATA_DIR=/data
     devices:
       - /dev/dri:/dev/dri
-      - /dev/tty0:/dev/tty0
+      - /dev/tty7:/dev/tty7
     volumes:
       - render-worker-data:/data
     restart: unless-stopped
