@@ -11,6 +11,7 @@ const $ = (sel) => document.querySelector(sel);
 async function init() {
   const res = await fetch("/api/config");
   state.config = await res.json();
+  $("#versionBadge").textContent = `v ${state.config.version}`;
   buildSettingsForm();
   refreshShowIfFromDOM();
   await loadSkins();

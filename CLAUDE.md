@@ -25,23 +25,42 @@ not part of the real deployment.
 
 ### Redeploy procedure
 
-No git remote is configured -- code moves via `tar` piped over `ssh` (from
-the Windows dev machine, in Git Bash; `rsync` isn't installed there, and
-`MSYS_NO_PATHCONV=1` is required or Git Bash mangles the remote paths):
+The project now has a real (public) remote: `https://github.com/esploe/osr.git`
+on branch `main`. Both `.118` and `.115` have their own clone at
+`~/osu-replay-renderer` (moved off the old `/tmp/osu-replay-renderer`
+tar-drop location -- `/tmp` isn't durable across reboots, which matters
+once the checkout is a real git working tree). The old tar-over-ssh
+procedure is retired; don't resurrect it unless the GitHub remote itself
+becomes unreachable.
 
+**Important:** Compose derives its project name (and therefore which
+containers/named volumes a deploy attaches to) from the checkout
+directory's *basename*. Both clones must be named `osu-replay-renderer`
+-- a differently-named clone would spin up a second, empty-volume
+deployment side-by-side instead of updating the existing one.
+
+From the dev machine, same as any repo: commit, then `git push`.
+
+On each VM:
 ```bash
-cd "/path/to/osu-replay-renderer"
-MSYS_NO_PATHCONV=1 tar --exclude='data' --exclude='.git' -czf - . | ssh <user>@<host> 'rm -rf /tmp/osu-replay-renderer-new && mkdir -p /tmp/osu-replay-renderer-new && tar -xzf - -C /tmp/osu-replay-renderer-new && echo COPY_OK'
+cd ~/osu-replay-renderer && git pull
 ```
-Then on the remote host: copy over the existing `.env` (don't lose it),
-swap the directory in, and rebuild:
 ```bash
-cp /tmp/osu-replay-renderer/.env /tmp/osu-replay-renderer-new/.env
-rm -rf /tmp/osu-replay-renderer && mv /tmp/osu-replay-renderer-new /tmp/osu-replay-renderer
-cd /tmp/osu-replay-renderer
-docker compose up --build -d                              # coordinator (.118)
-sudo docker compose -f docker-compose.worker.yml up --build -d   # worker (.115), needs sudo
+docker compose up --build -d                                    # coordinator (.118)
 ```
+```bash
+sudo docker compose -f docker-compose.worker.yml up --build -d  # worker (.115), needs sudo
+```
+
+`.env` is gitignored and was copied over once by hand when each clone was
+first set up (from the old `/tmp/osu-replay-renderer/.env`) -- it isn't
+touched by `git pull`, so new `.env.example` keys added later need to be
+added to each host's real `.env` manually.
+
+The web UI shows a build-version badge (top-right, short git commit hash,
+via `docker/Dockerfile`'s `gitinfo` stage -> `/api/config`'s `version`
+field) specifically so a stale deploy is visible at a glance instead of
+having to guess whether `git pull` + rebuild actually landed.
 
 ## Architecture
 

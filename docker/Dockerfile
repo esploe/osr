@@ -1,6 +1,19 @@
 # syntax=docker/dockerfile:1
 
 ############################
+# Stage 0: version info    #
+############################
+# Deliberately its own stage, independent of danser-build below -- if this
+# lived inside danser-build, COPYing .git (which changes every commit) would
+# invalidate that stage's cache and force a full danser-go re-clone/rebuild
+# on every single deploy instead of just when DANSER_REF/Dockerfile change.
+FROM node:20-bookworm-slim AS gitinfo
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+WORKDIR /repo
+COPY .git ./.git
+RUN git rev-parse --short HEAD > /version.txt 2>/dev/null || echo "unknown" > /version.txt
+
+############################
 # Stage 1: build danser-go #
 ############################
 FROM golang:1.24-bookworm AS danser-build
@@ -85,6 +98,7 @@ COPY server/package.json ./
 RUN npm install --omit=dev
 COPY server/src ./src
 COPY web /app/web
+COPY --from=gitinfo /version.txt /app/VERSION.txt
 
 ENV DANSER_BIN=/app/danser/danser
 ENV WEB_DIR=/app/web
