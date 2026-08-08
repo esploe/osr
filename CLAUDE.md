@@ -145,19 +145,59 @@ physical display connected** (confirmed in their own source,
 `MasterIO02/ordr-client`), meaning their danser renders natively with zero
 bridging, no VirtualGL needed at all.
 
-Two paths discussed, neither started:
-1. **Physical HDMI/DP dummy plug** in the RX 570's actual output port
-   (~$10). Since this is true VFIO PCI passthrough (not vGPU/SR-IOV), the
-   guest's `amdgpu` driver should see a real EDID-detected display exactly
-   like bare metal -- Proxmox's own VM console is a *separate* emulated
-   display device (`bochs-drm`, confirmed via `lspci -k` showing two VGA
-   controllers), so this wouldn't interfere with normal Proxmox access.
-   User doesn't have physical access to the box for ~2 days as of last
-   discussion.
-2. **Patch danser-go for headless EGL/GBM rendering**, removing the GLFW/X11
-   dependency (and therefore VirtualGL) entirely. Real Go source changes,
-   not a config tweak -- scoped as "worth trying if the dummy plug doesn't
-   pan out," not started.
+**Current status (in progress):** user doesn't have physical access to the
+`.115` box, so instead of a physical HDMI/DP dummy plug (~$10, the
+originally discussed fix), we're doing the software equivalent -- forcing
+a real HDMI/DVI/DP connector "connected"
+at the kernel level via a `video=<connector>:D` boot parameter in the VM
+guest's GRUB config (capital `D` forces the connector on with a default
+mode even with no EDID/monitor detected). This is a *different* mechanism
+than the `amdgpu.virtual_display=` route rejected below -- it drives the
+GPU's real output hardware for real, just skips the physical
+plug-detection handshake, and (unlike `virtual_display=`) works reliably
+for HDMI/DVI specifically because TMDS is purely source-driven with no
+handshake required (DisplayPort needs real electrical AUX-channel link
+training a software force can't fake, which is exactly why physical DP
+dummy plugs exist).
+
+Applying the grub edit alone does **not** by itself change render speed --
+confirmed live: a render run immediately after was still ~0.2x realtime at
+2560x1440@144, matching the *same* per-pixel throughput as the pre-edit
+baseline (0.85x-ish at a lower res, scaled linearly for pixel count per
+the throughput-bound finding above). Root cause: `docker/worker-entrypoint.sh`
+unconditionally started Xvfb + VirtualGL regardless of connector status --
+forcing the connector "connected" is a prerequisite for the real fix, not
+the fix itself, since nothing was pointed at that connector yet.
+
+**Next step, just implemented, NOT YET LIVE-VERIFIED:**
+`docker/worker-entrypoint.sh` now supports `WORKER_DISPLAY_MODE=xorg`
+(opt-in, default remains the proven `xvfb-vgl` path) -- starts a real Xorg
+server against the amdgpu DDX driver (`docker/xorg-worker.conf`) instead of
+Xvfb, and skips VirtualGL entirely (`lib/danser.js` just needs
+`USE_VIRTUALGL` unset, which the entrypoint now does in this mode) so
+danser's GLX calls go straight to Xorg, straight to the GPU -- no
+per-frame bridging copy. Also added to the Dockerfile:
+`xserver-xorg-core`/`xserver-xorg-video-amdgpu`, and an `/etc/X11/Xwrapper.config`
+override (`allowed_users=anybody`) since Xorg.wrap otherwise refuses to
+start without a real console session, which a container never has.
+`docker-compose.worker.yml` now also passes through `/dev/tty0` for
+Xorg's VT access.
+
+This is **unverified against the real box** -- real-GPU-Xorg-in-a-container
+has known rough edges (DRM master acquisition, VT/tty handling) that can't
+be fully confirmed without running it live. To test: redeploy the worker,
+confirm the forced connector actually shows `connected`
+(`cat /sys/class/drm/card*-<connector>/status`), set
+`WORKER_DISPLAY_MODE=xorg` in the worker's `.env`, redeploy again, and
+check the container logs / `/tmp/xorg-worker.log` inside it. A failed Xorg
+start exits the entrypoint non-zero and crash-loops the worker container --
+roll back by unsetting `WORKER_DISPLAY_MODE` (or setting it back to
+`xvfb-vgl`) rather than debugging blind against a dead worker.
+
+If the Xorg path turns out to be a dead end, **patch danser-go for headless
+EGL/GBM rendering** (removing the GLFW/X11 dependency, and therefore any
+display server at all) remains the fallback -- real Go source changes, not
+a config tweak, not started.
 
 A software-only "virtual display via `amdgpu.virtual_display=<PCI-ID>,1`
 kernel parameter" route was investigated and rejected: it requires a VM

@@ -61,7 +61,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # which is exactly the "unknown libva error" / "Device creation failed"
     # failure this was missing before. vainfo is just for diagnostics.
     libva2 libva-drm2 mesa-va-drivers vainfo \
+    # For the worker's opt-in WORKER_DISPLAY_MODE=xorg path (see
+    # docker/worker-entrypoint.sh) -- a real Xorg server against the amdgpu
+    # DDX driver, bypassing VirtualGL entirely. Unused (but harmless/idle)
+    # in the coordinator's software-only container and the worker's default
+    # xvfb-vgl mode.
+    xserver-xorg-core xserver-xorg-video-amdgpu \
     && rm -rf /var/lib/apt/lists/*
+
+# Xorg.wrap (xserver-xorg-core's setuid launcher) refuses to start Xorg
+# unless the invoking user owns the active console tty by default -- there
+# is no real console session in a container, so that check always fails
+# here. We always run as root anyway, so disabling it is safe.
+RUN mkdir -p /etc/X11 && printf 'allowed_users=anybody\nneeds_root_rights=yes\n' > /etc/X11/Xwrapper.config
 
 # VirtualGL: Xvfb alone only ever does software (llvmpipe) OpenGL -- GLFW
 # 3.3 (what danser uses) only speaks GLX on Linux, with no EGL-headless
@@ -91,6 +103,7 @@ COPY --from=danser-build /src/libbass.so /src/libbass_fx.so /src/libbassmix.so /
 COPY docker/asound.conf /etc/asound.conf
 COPY docker/entrypoint.sh /app/entrypoint.sh
 COPY docker/worker-entrypoint.sh /app/worker-entrypoint.sh
+COPY docker/xorg-worker.conf /app/xorg-worker.conf
 RUN chmod +x /app/entrypoint.sh /app/worker-entrypoint.sh
 
 WORKDIR /app/server

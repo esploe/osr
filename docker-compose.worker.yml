@@ -15,6 +15,13 @@
 #
 # Copy .env.example to .env here too and fill in COORDINATOR_URL and
 # WORKER_TOKEN (the same secret configured on the coordinator).
+#
+# WORKER_DISPLAY_MODE=xorg (optional, see docker/worker-entrypoint.sh) runs
+# danser against a real Xorg server on the GPU's actual output instead of
+# Xvfb+VirtualGL -- needs a connector forced "connected" at the kernel level
+# first (video=<connector>:D boot param on this VM). /dev/tty0 is passed
+# through below for Xorg's VT access in that mode; if Xorg still fails to
+# grab DRM master, check /tmp/xorg-worker.log inside the container.
 
 services:
   worker:
@@ -29,6 +36,7 @@ services:
       - DATA_DIR=/data
     devices:
       - /dev/dri:/dev/dri
+      - /dev/tty0:/dev/tty0
     volumes:
       - render-worker-data:/data
     restart: unless-stopped
