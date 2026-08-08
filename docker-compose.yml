@@ -1,0 +1,25 @@
+services:
+  renderer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: osu-replay-renderer:local
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+      - DATA_DIR=/data
+      - RENDER_CONCURRENCY=1
+    volumes:
+      - render-data:/data
+    restart: unless-stopped
+    # Software OpenGL rendering is CPU + RAM heavy at higher resolutions.
+    # Raise this if renders get OOM-killed (mem_limit works with plain
+    # `docker compose up`, unlike deploy.resources which needs swarm mode).
+    mem_limit: 4g
+    shm_size: "1gb"
+
+volumes:
+  render-data:

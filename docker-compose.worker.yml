@@ -1,0 +1,37 @@
+# Deploy this file on the GPU-passthrough VM, separately from the
+# coordinator's docker-compose.yml. It runs the exact same image built by
+# the coordinator's Dockerfile, just in "worker" mode: it polls the
+# coordinator for jobs and renders them using the real GPU instead of
+# software rendering.
+#
+# Prerequisites on this VM:
+#  - GPU passthrough already working (this file does not set that up)
+#  - Your user/Docker has access to /dev/dri (usually the `video`/`render`
+#    host groups -- add your user to them if `docker compose up` reports a
+#    permission error opening the device)
+#  - Either build the image here from the same source
+#    (`docker compose -f docker-compose.worker.yml build`), or copy the
+#    image built on the coordinator over with `docker save`/`docker load`
+#
+# Copy .env.example to .env here too and fill in COORDINATOR_URL and
+# WORKER_TOKEN (the same secret configured on the coordinator).
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: osu-replay-renderer:local
+    entrypoint: ["/app/worker-entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/data
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - render-worker-data:/data
+    restart: unless-stopped
+
+volumes:
+  render-worker-data:
