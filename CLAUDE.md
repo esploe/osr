@@ -183,6 +183,21 @@ Multiple distinct, now-fixed bugs, in the order discovered:
    see `buildMultipartBody()` in `lib/ziplineClient.js`. Verified against
    the real server with a real 13MB file (exact byte count + correct
    content-type preserved).
+5. **Share link uses whatever host the upload hit** -- Zipline builds the
+   URL in its upload response from the request's own host, not a fixed
+   public domain. Since fix #3 requires `ZIPLINE_URL` to be the LAN IP
+   (`http://192.168.10.117:3000`), the share link handed back was
+   `https://192.168.10.117:3000/...` -- unreachable off the LAN and with no
+   valid TLS cert there anyway, even though the upload itself succeeded.
+   User confirmed `http://<ip>`, `https://<ip>`, `http://srx`, `https://srx`
+   all work as *upload* targets, but the auto-generated link should always
+   be the `srx` one regardless of which host `.env` points uploads at.
+   **Fixed** by adding `ZIPLINE_PUBLIC_URL` (optional, falls back to
+   `ZIPLINE_URL`) and rewriting the returned URL's scheme+host to it in
+   `toPublicUrl()` in `lib/ziplineClient.js`, before the link is ever
+   stored on the job or shown to the user. `.118`'s `.env` should have
+   `ZIPLINE_PUBLIC_URL=https://srx.plose.dev` set alongside the LAN-IP
+   `ZIPLINE_URL`.
 
 **Last known state (unconfirmed as fully resolved):** after fix #4 was
 deployed, one render still hit the Cloudflare 413 again -- meaning either

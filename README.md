@@ -65,7 +65,11 @@ share link shown next to the video on the frontend:
    generate a token (this is **not** your login password).
 2. Set `ZIPLINE_URL` (e.g. `https://your-zipline-domain` or a LAN IP) and
    `ZIPLINE_TOKEN` in `.env`.
-3. Restart with `docker compose up --build`.
+3. If `ZIPLINE_URL` is a LAN IP rather than your public domain, also set
+   `ZIPLINE_PUBLIC_URL` to your real public Zipline URL -- otherwise the
+   share link shown to users will be the unreachable LAN IP link Zipline
+   hands back.
+4. Restart with `docker compose up --build`.
 
 If the upload fails for any reason (Zipline down, bad token, etc.) the
 render still succeeds and stays downloadable locally -- sharing is
@@ -127,6 +131,7 @@ persist in the data volume for reuse.
 | `OSU_CLIENT_ID` / `OSU_CLIENT_SECRET` | Enables score-URL rendering (optional) |
 | `RENDER_CONCURRENCY` | Renders to run at once (default `1` -- keep low for CPU rendering) |
 | `ZIPLINE_URL` / `ZIPLINE_TOKEN` | Enables auto-upload of finished renders to Zipline (optional) |
+| `ZIPLINE_PUBLIC_URL` | Public domain for share links, if `ZIPLINE_URL` is a LAN IP (optional) |
 | `RENDER_MODE` | `local` (default) or `worker` -- offload rendering to a remote GPU worker |
 | `WORKER_TOKEN` | Shared secret between coordinator and worker (required for `RENDER_MODE=worker`) |
 | `COORDINATOR_URL` | Worker-side only: `http://<coordinator LAN IP>:8080` |

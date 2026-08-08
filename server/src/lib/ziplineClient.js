@@ -66,5 +66,31 @@ export async function uploadToZipline(filePath, filename) {
   const data = await res.json();
   const url = data.files?.[0]?.url;
   if (!url) throw new Error(`Zipline upload response had no file URL: ${JSON.stringify(data)}`);
-  return url;
+  return toPublicUrl(url);
+}
+
+// Zipline builds the URL it returns from whatever host the upload request
+// hit, not from a fixed public domain. That's normally fine, but ZIPLINE_URL
+// sometimes has to be the LAN IP:port (bypassing Cloudflare's 100MB request
+// cap, see CLAUDE.md) -- in that case Zipline hands back an
+// https://<lan-ip>:3000/... link, which is unreachable off the LAN and has
+// no valid TLS cert anyway. ZIPLINE_PUBLIC_URL lets the share link shown to
+// users point at the real public domain regardless of which host the
+// upload itself used. Falls back to ZIPLINE_URL when unset, which keeps
+// existing single-URL setups working unchanged.
+function toPublicUrl(rawUrl) {
+  const publicBase = process.env.ZIPLINE_PUBLIC_URL || process.env.ZIPLINE_URL;
+  try {
+    const publicOrigin = new URL(publicBase);
+    const url = new URL(rawUrl);
+    url.protocol = publicOrigin.protocol;
+    url.hostname = publicOrigin.hostname;
+    // url.host would leave a stale port behind (e.g. the LAN ":3000")
+    // instead of clearing it, since setting .host doesn't reset .port when
+    // the new value omits one -- set .port explicitly instead.
+    url.port = publicOrigin.port;
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
 }
