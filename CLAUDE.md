@@ -169,35 +169,51 @@ unconditionally started Xvfb + VirtualGL regardless of connector status --
 forcing the connector "connected" is a prerequisite for the real fix, not
 the fix itself, since nothing was pointed at that connector yet.
 
-**Next step, just implemented, NOT YET LIVE-VERIFIED:**
-`docker/worker-entrypoint.sh` now supports `WORKER_DISPLAY_MODE=xorg`
-(opt-in, default remains the proven `xvfb-vgl` path) -- starts a real Xorg
-server against the amdgpu DDX driver (`docker/xorg-worker.conf`) instead of
-Xvfb, and skips VirtualGL entirely (`lib/danser.js` just needs
-`USE_VIRTUALGL` unset, which the entrypoint now does in this mode) so
-danser's GLX calls go straight to Xorg, straight to the GPU -- no
-per-frame bridging copy. Also added to the Dockerfile:
-`xserver-xorg-core`/`xserver-xorg-video-amdgpu`, and an `/etc/X11/Xwrapper.config`
-override (`allowed_users=anybody`) since Xorg.wrap otherwise refuses to
-start without a real console session, which a container never has.
-`docker-compose.worker.yml` now also passes through `/dev/tty0` for
-Xorg's VT access.
+**`docker/worker-entrypoint.sh` now supports `WORKER_DISPLAY_MODE=xorg`**
+(opt-in, default remains `xvfb-vgl`) -- starts a real Xorg server against
+the amdgpu DDX driver (`docker/xorg-worker.conf`) instead of Xvfb, skips
+VirtualGL entirely (`USE_VIRTUALGL` unset -> `lib/danser.js` runs danser
+directly), so danser's GLX calls go straight to Xorg, straight to the GPU.
+Also added: `xserver-xorg-core`/`xserver-xorg-video-amdgpu` in the
+Dockerfile, an `/etc/X11/Xwrapper.config` override (Xorg.wrap otherwise
+refuses to start without a real console session), `/dev/tty7` passed
+through in `docker-compose.worker.yml` (Xorg pinned to VT 7 explicitly --
+letting it auto-pick defaults to VT 1, the host's real login console,
+worth avoiding outright), and an explicit `BusID "PCI:0:16:0"` in
+`xorg-worker.conf` (this box has two PCI display devices -- Proxmox's own
+emulated Bochs/QEMU VGA console *and* the real GPU -- and an unconfigured
+Device section falls back toward the "primary" one, which is the Bochs
+device, producing "no screens found").
 
-This is **unverified against the real box** -- real-GPU-Xorg-in-a-container
-has known rough edges (DRM master acquisition, VT/tty handling) that can't
-be fully confirmed without running it live. To test: redeploy the worker,
-confirm the forced connector actually shows `connected`
-(`cat /sys/class/drm/card*-<connector>/status`), set
-`WORKER_DISPLAY_MODE=xorg` in the worker's `.env`, redeploy again, and
-check the container logs / `/tmp/xorg-worker.log` inside it. A failed Xorg
-start exits the entrypoint non-zero and crash-loops the worker container --
-roll back by unsetting `WORKER_DISPLAY_MODE` (or setting it back to
-`xvfb-vgl`) rather than debugging blind against a dead worker.
+**LIVE-VERIFIED working as of the commit after `d5b04e9`:** confirmed via
+the worker's own log --
+`GL Renderer: AMD Radeon RX 570 Series (polaris10, ...)` -- genuine native
+hardware GL, zero VirtualGL, full job completed and uploaded successfully.
 
-If the Xorg path turns out to be a dead end, **patch danser-go for headless
-EGL/GBM rendering** (removing the GLFW/X11 dependency, and therefore any
-display server at all) remains the fallback -- real Go source changes, not
-a config tweak, not started.
+**But it did not improve render speed at all** -- ~0.90-0.94x realtime at
+1080p60, essentially identical to the old Xvfb+VirtualGL baseline
+(0.8-0.92x). This is the important negative result: **VirtualGL's
+frame-copy bridging was not actually the dominant bottleneck** --
+something that scales with pixel count is capping *both* paths equally,
+since removing VirtualGL from the pipeline entirely changed nothing.
+
+Leading suspect now: danser's own pixel readback from the GPU before
+handing frames to ffmpeg (mentioned above, "on top of danser's own
+separate pixel readback for the ffmpeg pipe") -- that step is identical
+in both configurations, which would fully explain this result. Fixing
+that for real means restructuring how danser gets pixels to the encoder
+(e.g. a zero-copy GPU->VAAPI handoff via DMA-BUF instead of a CPU-side
+readback+reupload round-trip), not just swapping the display backend --
+real Go source changes to danser-go's rendering/encode-handoff path, a
+bigger lift than originally scoped as "patch for headless EGL/GBM." Not
+started.
+
+Given the Xorg path is now proven not to be a speed win, whether to keep
+`WORKER_DISPLAY_MODE=xorg` as the deployed default (one less moving part,
+no VirtualGL dependency, but more fragile container/VT/BusID setup) vs.
+reverting to `xvfb-vgl` (simpler, proven, same speed either way) is an
+open decision -- ask the user rather than assuming either way next time
+this comes up.
 
 A software-only "virtual display via `amdgpu.virtual_display=<PCI-ID>,1`
 kernel parameter" route was investigated and rejected: it requires a VM
