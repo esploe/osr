@@ -183,12 +183,62 @@ power-management artifact (ruled out #6), not blocking readback (ruled
 out #4) -- most likely genuine bursty GPU/CPU handoff in danser's main
 render loop itself: the *readback* is pipelined/async, but nothing found
 so far suggests danser pipelines the *rendering* of frame N+1 while frame
-N is still being processed by the GPU. If true, real fix = restructuring
-danser-go's render loop for frame-ahead pipelining -- a much deeper,
-riskier change than anything else tried, unconfirmed without actual
-profiling (e.g. `radeontop`, Mesa GPU frame-time instrumentation -- none
-installed/available in this environment) to know where time is actually
-going before touching code.
+N is still being processed by the GPU. **This is now confirmed with real
+profiling data, not just inferred -- see "Session 2" below.**
+
+### Session 2: real profiling data (confirms the pipelining hypothesis)
+
+`radeontop` turned out to already be installed on the worker (`.115`,
+pre-existing, presumably from whatever else that box is used for --
+it's also running a native `jellyfin` media server, hence the `jellyfin`
+SSH user) and needs no `sudo`: the `jellyfin` account is in the `video`
+and `render` groups, which is enough for both `radeontop` and reading
+`/sys/.../gpu_busy_percent` directly. `mpstat`/`pidstat` are **not**
+installed and installing them needs `apt-get` via `sudo`, which needs an
+interactive password on this box -- worked around by sampling
+`/proc/<pid>/stat` (`utime`+`stime` fields) directly once a second
+instead, which is world-readable regardless of process owner and needs
+no privilege at all.
+
+Test: real render via the coordinator's `Score URL` path, using the
+existing "quality 1440p144hz" profile (2560x1440@144, VAAPI h264) against
+a 136.638s replay -- i.e. the same class of workload as the "0.22x at
+1440p144" figure in item 6 above. Captured `radeontop -d - -i 0.5` and
+the `/proc` CPU sampler for the entire render (danser start to danser
+exit, ~537s wall time for 136.6s of content = **~0.25x realtime**,
+consistent with the earlier 0.22x reading on the same settings).
+
+**Results (538 GPU samples, 338 CPU samples, full render duration):**
+- **GPU busy%: mean 36.6%, min 0%, max 45.8%, 99% of all samples fall in
+  the 25-50% band.** No sample anywhere near 100%, and the earlier
+  "sharply oscillates between 0 and 100" description does not reproduce
+  under `radeontop`'s own sampling -- most likely that description came
+  from reading raw `gpu_busy_percent` in a tight instantaneous loop
+  (which really can read as binary 0/100 depending on exactly when the
+  kernel's own counter last updated), whereas `radeontop` does its own
+  internal smoothing. Both readings agree on the conclusion that matters:
+  **the GPU is idle roughly 2/3 of the time.**
+- **CPU: danser process mean 42% of one core (max 61%); the VAAPI-feeding
+  ffmpeg process mean 23% (max 31%); the audio-encode ffmpeg process
+  ~1.5%.** The worker VM has 4 cores. Nothing here is remotely close to
+  saturating even a single core, let alone all 4.
+- **Conclusion: neither the GPU nor any CPU-bound stage is saturated.**
+  That rules out both "GPU compute-bound" and "CPU compute-bound" as the
+  explanation for the ~0.25x speed -- if either were the true bottleneck,
+  that resource's utilization would sit near 100%. Instead, wall-clock
+  time is being lost to **synchronization/latency overhead between
+  stages** (GPU render -> readback -> CPU-side packaging -> ffmpeg pipe
+  -> encode), each one idling while waiting on the other, rather than
+  frame N+1 being prepared/rendered while frame N is still in flight
+  through readback/encode. This is exactly the "no frame-ahead
+  pipelining" hypothesis from Session 1 -- now backed by numbers instead
+  of being the leading guess.
+- **Caveat:** danser-go is not vendored in this repo -- `docker/Dockerfile`
+  clones it fresh from `https://github.com/Wieku/danser-go.git` at build
+  time (pinned via the `DANSER_REF` build-arg, defaults to `master`). Any
+  render-loop pipelining fix means forking upstream and pointing
+  `DANSER_REF` at the fork/branch (or maintaining a patch applied during
+  the Docker build), not an in-repo edit.
 
 **Xorg native rendering path** (built and proven working as infrastructure,
 even though it didn't fix speed): `docker/worker-entrypoint.sh` supports
@@ -226,14 +276,20 @@ Needs, all live-verified working on `.115`:
   ever useful again (e.g. if VirtualGL turns out to matter more at
   different resolutions/settings than tested here).
 
-**Realistic options from here, none started:**
-1. Accept ~0.85-0.94x as the practical ceiling for this GPU/software combo.
+**Realistic options from here:**
+1. Accept ~0.85-0.94x (or ~0.25x at 1440p144-class settings) as the
+   practical ceiling for this GPU/software combo.
 2. Lower default render resolution/fps -- the only lever proven to help
    (~4x per resolution), zero engineering, real quality tradeoff.
-3. Get actual profiling on the box before touching any more code --
-   otherwise further changes are still guessing.
-4. Real danser-go render-loop pipelining surgery -- biggest lift, most
-   uncertain payoff, don't start this blind.
+3. ~~Get actual profiling on the box before touching any more code~~ --
+   **done, see "Session 2" above.** Confirms neither GPU nor CPU is
+   saturated; the loss is synchronization overhead between stages.
+4. Real danser-go render-loop pipelining surgery -- biggest lift, but no
+   longer a blind guess: Session 2's profiling data is real evidence this
+   is the correct direction (nothing else is close to saturated). Still
+   means forking upstream danser-go (see caveat above) and getting
+   comfortable with its render loop / GL synchronization code before
+   touching it -- not started as of this writing.
 
 A software-only "virtual display via `amdgpu.virtual_display=<PCI-ID>,1`
 kernel parameter" route was investigated early on and rejected before any
