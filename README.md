@@ -118,6 +118,43 @@ GPU and is silently falling back to software rendering.
 
 Restart both sides after changing `RENDER_MODE`/`WORKER_TOKEN`.
 
+## Optional: Discord bot
+
+A separate, opt-in container that posts rendered videos into a Discord
+channel. Two triggers:
+
+- **Reply to a bathbot/owo score message** and `@mention` the bot in your
+  reply -> renders the score shown in that message.
+- **`@mention` the bot directly** (no reply, or replying to something that
+  isn't a recognized score bot) -> renders your own most recent
+  osu!standard score. Requires linking your account first with
+  `/link <osu username>`.
+
+The bot posts progress updates in-thread and edits them into the final
+Zipline share link once the render finishes -- it never posts a raw video
+attachment, so `ZIPLINE_URL`/`ZIPLINE_TOKEN` (see above) must be configured
+for it to have anything to post.
+
+Bathbot/owo message parsing is heuristic (their embeds don't carry a
+stable per-score URL, only a beatmap link + player name) -- see
+`bot/src/scoreParser.js` for exactly what it looks for, and the
+`SCORE_BOT_IDS` env var if it misidentifies which bot messages to react to.
+
+Setup:
+
+1. Create a Discord application at
+   https://discord.com/developers/applications, add a bot user, and enable
+   **Message Content Intent** on the Bot tab.
+2. Copy `.env.example` to `.env` and fill in `DISCORD_BOT_TOKEN` /
+   `DISCORD_CLIENT_ID` (see the comment block in `.env.example` for exact
+   steps, including the invite-link scopes/permissions needed).
+3. Make sure `OSU_CLIENT_ID`/`OSU_CLIENT_SECRET` and
+   `ZIPLINE_URL`/`ZIPLINE_TOKEN` are also set -- the bot needs both.
+4. Start it explicitly (it's opt-in, not part of a plain `docker compose up`):
+   ```
+   docker compose --profile bot up --build -d
+   ```
+
 ## Skins
 
 The bundled default skin ships with danser-go itself. Upload your own
@@ -135,3 +172,7 @@ persist in the data volume for reuse.
 | `RENDER_MODE` | `local` (default) or `worker` -- offload rendering to a remote GPU worker |
 | `WORKER_TOKEN` | Shared secret between coordinator and worker (required for `RENDER_MODE=worker`) |
 | `COORDINATOR_URL` | Worker-side only: `http://<coordinator LAN IP>:8080` |
+| `DISCORD_BOT_TOKEN` / `DISCORD_CLIENT_ID` | Enables the Discord bot (optional, opt-in container -- see above) |
+| `DISCORD_GUILD_ID` | Register the bot's slash commands to one guild instantly instead of globally (optional) |
+| `SCORE_BOT_IDS` | Discord IDs of the score bot(s) whose messages the bot should read replies to (optional) |
+| `BOT_RENDER_PROFILE` | Named render profile the Discord bot should use instead of defaults (optional) |

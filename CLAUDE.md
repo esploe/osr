@@ -51,6 +51,9 @@ docker compose up --build -d                                    # coordinator (.
 ```bash
 sudo docker compose -f docker-compose.worker.yml up --build -d  # worker (.115), needs sudo
 ```
+```bash
+docker compose --profile bot up --build -d                      # Discord bot (.118, opt-in, only if configured)
+```
 
 `.env` is gitignored and was copied over once by hand when each clone was
 first set up (from the old `/tmp/osu-replay-renderer/.env`) -- it isn't
@@ -91,6 +94,38 @@ having to guess whether `git pull` + rebuild actually landed.
   generated file, not guessed from source reading alone.
 - **Profiles** (`lib/profiles.js` + `routes/profiles.js`): named settings
   presets, stored as one JSON file in the coordinator's data dir. Coordinator-only concept, nothing worker-side.
+- **Discord bot** (`bot/`): separate, opt-in third service/image/container
+  (`docker-compose.yml`'s `bot` service, `profiles: ["bot"]` so a plain
+  `docker compose up` doesn't start it). Deliberately a thin HTTP client of
+  the coordinator's already-public `POST /api/render` (`scoreUrl` field) --
+  same entry point the web UI's "Score URL" tab uses -- so it needed **zero
+  coordinator-side changes**. It resolves a Discord trigger down to a
+  `scoreUrl` string itself using its own small osu! API v2 client
+  (`bot/src/osuApi.js`, client_credentials only, separate from and not
+  shared with `server/src/lib/osuApi.js`), then POSTs it and polls
+  `GET /api/render/:id` until done, editing its Discord reply with progress
+  and finally the job's `shareUrl`. Two triggers: reply to a bathbot/owo
+  score message + @mention the bot (parses the *replied-to* message's
+  embed for a beatmap link + player name via `bot/src/scoreParser.js`, then
+  looks up the matching score via `GET /beatmaps/{id}/scores/users/{user}/all`)
+  or @mention the bot with no such reply (renders the pinger's own most
+  recent score via `GET /users/{user}/scores/recent`, requires linking a
+  Discord account to an osu! username first via the bot's `/link` slash
+  command, stored in `bot/src/linkStore.js`, same one-JSON-file pattern as
+  `lib/profiles.js`). **Not yet live-verified** (built without a real
+  Discord bot token/server or live bathbot/owo messages to test against --
+  see "Known loose ends" below): `node --check` passes on every file and
+  discord.js's real exports were confirmed against an actual `npm install`,
+  and the embed parser was run against hand-written fixture embeds, but
+  none of that substitutes for testing against the real bots' current embed
+  layout, which may well have drifted from what `scoreParser.js` assumes.
+  Also unverified: whether `GET /beatmaps/{beatmap}/scores/users/{user}/all`
+  is in fact the exact real osu! API v2 path (recalled from general
+  knowledge, egress to osu.ppy.sh's docs was blocked when this was written).
+  First thing to do next session if this comes up again: get real
+  `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID` + a test server with bathbot or
+  owo in it, run `docker compose --profile bot up --build`, and fix
+  whatever the first real bathbot/owo reply reveals.
 
 ## Rendering pipeline internals (the hard-won parts)
 
@@ -373,6 +408,12 @@ manual-multipart client.
   services). If adding tests, `lib/osrParser.js` and
   `lib/settingsSchema.js#validateAndMerge` are the most self-contained/easy
   wins.
+- The Discord bot (`bot/`, see Architecture above) needs live verification
+  against a real bathbot/owo message before trusting it in production --
+  the embed-parsing heuristics in `bot/src/scoreParser.js` and the
+  `/beatmaps/{beatmap}/scores/users/{user}/all` osu! API v2 endpoint it
+  depends on were both written from general knowledge without being able
+  to test against the real thing.
 - Docker Desktop on the Windows dev machine has crashed unprompted a couple
   times during long sessions -- if a `docker` command fails with a
   `dockerDesktopLinuxEngine` pipe error, it just needs relaunching

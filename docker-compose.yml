@@ -21,5 +21,28 @@ services:
     mem_limit: 4g
     shm_size: "1gb"
 
+  bot:
+    # Opt-in: only started by `docker compose --profile bot up ...`, not a
+    # plain `docker compose up`. Without this, anyone who doesn't want the
+    # Discord bot would get a container crash-looping forever the moment
+    # they pull this change, since it refuses to start without
+    # DISCORD_BOT_TOKEN/DISCORD_CLIENT_ID set (see .env.example).
+    profiles: ["bot"]
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    image: osu-replay-renderer-bot:local
+    env_file:
+      - .env
+    environment:
+      - COORDINATOR_URL=http://renderer:8080
+      - BOT_DATA_DIR=/data
+    volumes:
+      - bot-data:/data
+    depends_on:
+      - renderer
+    restart: unless-stopped
+
 volumes:
   render-data:
+  bot-data:
