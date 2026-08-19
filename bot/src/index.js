@@ -127,5 +127,26 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-await registerCommands();
-await client.login(token);
+// A bad DISCORD_BOT_TOKEN surfaces here as a 401 from Discord's REST API,
+// which by default throws a raw DiscordAPIError stack -- catch it and print
+// a diagnosable message instead, since the real cause (wrong token, token
+// belongs to a different application than DISCORD_CLIENT_ID, or the value
+// in .env has stray whitespace/newlines) isn't obvious from the stack.
+try {
+  await registerCommands();
+  await client.login(token);
+} catch (err) {
+  if (err?.status === 401) {
+    console.error(
+      "Discord rejected the bot credentials (HTTP 401). Likely causes:\n" +
+        "  - DISCORD_BOT_TOKEN in .env doesn't match the token in the Developer Portal\n" +
+        "    (or the token was reset in the portal after .env was written).\n" +
+        "  - DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID belong to different applications.\n" +
+        "  - The value in .env has stray quotes/whitespace/newlines around it.\n" +
+        "Reset the token in the Developer Portal's Bot tab, paste the new value\n" +
+        "verbatim (no quotes) into .env, and restart."
+    );
+    process.exit(1);
+  }
+  throw err;
+}
