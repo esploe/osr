@@ -15,7 +15,14 @@ import { runRenderFlow } from "./renderFlow.js";
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 if (!token || !clientId) {
-  throw new Error("DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID are required to start the Discord bot.");
+  console.error("DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID are required to start the Discord bot.");
+  process.exit(1);
+}
+if (!process.env.COORDINATOR_URL) {
+  // Matches server/src/worker.js's own fail-loud check -- the bot has no
+  // same-machine default to fall back to (see renderClient.js).
+  console.error("COORDINATOR_URL is required (e.g. http://<coordinator LAN IP>:8080).");
+  process.exit(1);
 }
 
 const commands = [

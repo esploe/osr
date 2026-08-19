@@ -52,7 +52,7 @@ docker compose up --build -d                                    # coordinator (.
 sudo docker compose -f docker-compose.worker.yml up --build -d  # worker (.115), needs sudo
 ```
 ```bash
-docker compose --profile bot up --build -d                      # Discord bot (.118, opt-in, only if configured)
+docker compose -f docker-compose.bot.yml up --build -d          # Discord bot, own machine (see docker-compose.bot.yml), opt-in
 ```
 
 `.env` is gitignored and was copied over once by hand when each clone was
@@ -95,8 +95,17 @@ having to guess whether `git pull` + rebuild actually landed.
 - **Profiles** (`lib/profiles.js` + `routes/profiles.js`): named settings
   presets, stored as one JSON file in the coordinator's data dir. Coordinator-only concept, nothing worker-side.
 - **Discord bot** (`bot/`): separate, opt-in third service/image/container
-  (`docker-compose.yml`'s `bot` service, `profiles: ["bot"]` so a plain
-  `docker compose up` doesn't start it). Deliberately a thin HTTP client of
+  with its own compose file, `docker-compose.bot.yml` -- same pattern as
+  the render worker (own machine, reaches the coordinator over a real LAN
+  `COORDINATOR_URL`, no Docker-internal service-name DNS to rely on since
+  it's a different compose project). Nothing stops it from running on the
+  coordinator's own machine too (point `COORDINATOR_URL` at
+  `http://localhost:8080`), it just isn't wired into the coordinator's own
+  `docker-compose.yml` as a same-project service -- that was the first
+  approach taken here, then reverted once it turned out the bot needed to
+  run on a genuinely separate VM (`.120`) instead, at which point the
+  `http://renderer:8080` Docker-DNS shortcut it relied on would no longer
+  resolve. Deliberately a thin HTTP client of
   the coordinator's already-public `POST /api/render` (`scoreUrl` field) --
   same entry point the web UI's "Score URL" tab uses -- so it needed **zero
   coordinator-side changes**. It resolves a Discord trigger down to a

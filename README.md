@@ -120,8 +120,11 @@ Restart both sides after changing `RENDER_MODE`/`WORKER_TOKEN`.
 
 ## Optional: Discord bot
 
-A separate, opt-in container that posts rendered videos into a Discord
-channel. Two triggers:
+A separate container (its own compose file, `docker-compose.bot.yml` --
+same pattern as the remote GPU worker below: run it on its own machine, or
+on the coordinator's own machine pointing `COORDINATOR_URL` at
+`http://localhost:8080`) that posts rendered videos into a Discord channel.
+Two triggers:
 
 - **Reply to a bathbot/owo score message** and `@mention` the bot in your
   reply -> renders the score shown in that message.
@@ -145,14 +148,17 @@ Setup:
 1. Create a Discord application at
    https://discord.com/developers/applications, add a bot user, and enable
    **Message Content Intent** on the Bot tab.
-2. Copy `.env.example` to `.env` and fill in `DISCORD_BOT_TOKEN` /
-   `DISCORD_CLIENT_ID` (see the comment block in `.env.example` for exact
-   steps, including the invite-link scopes/permissions needed).
+2. Copy `.env.example` to `.env` (on whichever machine will run the bot)
+   and fill in `DISCORD_BOT_TOKEN` / `DISCORD_CLIENT_ID` (see the comment
+   block in `.env.example` for exact steps, including the invite-link
+   scopes/permissions needed) and `COORDINATOR_URL=http://<coordinator LAN
+   IP>:8080` -- the bot has no same-machine default and refuses to start
+   without it.
 3. Make sure `OSU_CLIENT_ID`/`OSU_CLIENT_SECRET` and
    `ZIPLINE_URL`/`ZIPLINE_TOKEN` are also set -- the bot needs both.
-4. Start it explicitly (it's opt-in, not part of a plain `docker compose up`):
+4. Start it:
    ```
-   docker compose --profile bot up --build -d
+   docker compose -f docker-compose.bot.yml up --build -d
    ```
 
 ## Skins

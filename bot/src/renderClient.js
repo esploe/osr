@@ -2,7 +2,13 @@
 // never touches jobQueue/renderPipeline/danser directly, it's just another
 // caller of POST /api/render, exactly like the web frontend's "Score URL"
 // tab (see web/app.js#startRender). Zero coordinator-side changes needed.
-const COORDINATOR_URL = process.env.COORDINATOR_URL || "http://renderer:8080";
+//
+// COORDINATOR_URL has no default here (same as server/src/worker.js's own
+// COORDINATOR_URL) -- the bot is meant to run on its own machine/compose
+// project (see docker-compose.bot.yml), so there's no Docker-internal
+// service-name DNS to fall back to; index.js fails loudly at startup if
+// this isn't set rather than silently pointing at a wrong/unreachable host.
+const COORDINATOR_URL = (process.env.COORDINATOR_URL || "").replace(/\/+$/, "");
 
 export async function submitRender(scoreUrl, settings) {
   const form = new FormData();
