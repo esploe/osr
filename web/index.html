@@ -160,7 +160,10 @@
             </div>
             <div class="miss-playfield-wrap">
               <h3>Playback <span id="missSelectedLabel" class="pill">nothing selected</span></h3>
-              <svg id="missPlayfield" class="miss-playfield" viewBox="-128 -96 768 576" preserveAspectRatio="xMidYMid meet"></svg>
+              <svg id="missPlayfield" class="miss-playfield" viewBox="-128 -96 768 576" preserveAspectRatio="xMidYMid meet">
+                <g id="missBaseGroup"></g>
+                <g id="missOverlayGroup"></g>
+              </svg>
               <div id="missDiagnosis" class="miss-diagnosis"></div>
               <div class="miss-player">
                 <div class="miss-player-controls">
@@ -178,7 +181,7 @@
                 <svg id="missTimingStrip" class="miss-timing-strip" viewBox="0 0 1000 44" preserveAspectRatio="none"></svg>
               </div>
               <p class="hint">
-                <b>Cursor dot</b> is cyan idle, glows white while a hit-key is held, and flashes a bright ring at the exact frame of every tap. <b>Timing strip</b> below the scrub bar shows the object's hit windows (green 300, yellow 100, orange 50) as colored bands and every tap as a vertical tick — colored by whether the aim was on the note or off. Playback defaults to 0.5×.
+                <b>Diamonds</b> mark every tap — placed permanently at the exact spot the cursor was, labelled with timing offset, green if the aim landed on the note or red (with a leader line to the note) if it missed. The full cursor path is the faint cyan trail (brighter where a key was held). The <b>white dot</b> is the live playhead during playback; approach circles shrink onto their notes like in-game. <b>Timing strip</b> below shows the 300/100/50 hit windows as green/yellow/orange bands with a tick for every tap. Everything's visible whether you play, scrub, or just sit still.
               </p>
             </div>
           </div>

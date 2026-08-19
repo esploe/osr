@@ -739,6 +739,7 @@ function selectMiss(misses, index, stats) {
   });
 
   renderTimingStrip();
+  renderMissBaseLayer();
 
   const scrub = $("#missScrub");
   scrub.min = tMin;
@@ -784,111 +785,114 @@ function tickPlayback(now) {
   missPlayer.rafId = requestAnimationFrame(tickPlayback);
 }
 
-function renderMissPlayback() {
-  const { miss: m, stats, cursor, objects, currentT, tMin, tMax } = missPlayer;
+// The playfield is drawn in two layers:
+//   * a PERSISTENT base layer (all nearby objects, the full cursor path,
+//     and permanent tap markers) that never changes as time advances --
+//     so a paused / scrubbed frame always shows the whole moment and the
+//     taps stay put to be studied instead of flashing by; and
+//   * a time-driven overlay (approach circles, the live cursor dot) that
+//     rides on top to give the sense of motion during Play.
+// The base layer is rebuilt only when the selected miss changes; the
+// overlay is rebuilt every frame. They're kept in two <g> groups so the
+// per-frame work is just swapping the small overlay group.
+function renderMissBaseLayer() {
+  const { miss: m, stats, cursor, objects } = missPlayer;
   if (!m) return;
-
-  const svg = $("#missPlayfield");
   const r = stats.circleRadiusOsuPx;
-  const preempt = stats.preemptMs || 1200;
-  const hw50 = stats.hitWindow50Ms || 150;
-  const fadeOutMs = 200; // how long a passed object takes to fade after its window closes
-
-  // Cursor position at currentT: linear interpolation between straddling frames.
-  const cursorAt = cursorPositionAt(cursor, currentT);
-  const trail = cursorTrail(cursor, currentT, 300);
-  // Key state at currentT: use the most-recent frame's keys bitfield.
-  // Rising-edge detection ("just tapped") uses the previous frame's
-  // keys, so the cursor visibly flashes on the exact tap frame.
-  const keysNow = cursorKeysAt(cursor, currentT);
-  const justPressed = cursorJustPressed(cursor, currentT, 60); // "flash" for 60ms after a press
 
   const parts = [];
-  // Background covers the whole padded viewBox so the padded area isn't
-  // visibly a different color from the playfield proper.
   parts.push(`<rect x="-128" y="-96" width="768" height="576" fill="#0e0c14" />`);
-  // Subtle guide showing the actual 512x384 osu! playfield boundary --
-  // objects sitting just outside (edge of the map's playable area) are
-  // legitimate and shouldn't look "clipped" against a hard black frame.
   parts.push(`<rect x="0" y="0" width="512" height="384" fill="none" stroke="var(--border)" stroke-width="1" opacity="0.55" />`);
 
-  for (const o of objects) {
-    // Is this object visible right now?
-    const showFrom = o.t - preempt;
-    const showUntil = (o.k === "s" ? (o.et ?? o.t) : o.t) + hw50 + fadeOutMs;
-    if (currentT < showFrom || currentT > showUntil) continue;
-
+  // All nearby objects, ghosted -- the missed one highlighted. Drawn once,
+  // always visible, so the pattern is legible even paused between notes.
+  const objectsByTime = objects.slice().sort((a, b) => a.t - b.t);
+  for (const o of objectsByTime) {
     const isMissed = o.i === m.objectIndex;
-    // Base opacity: fade in over first 200ms of the approach window,
-    // hold full while active, fade out after hit-window closes.
-    const fadeIn = Math.min(1, (currentT - showFrom) / 200);
-    const fadeOut = currentT > (o.t + hw50)
-      ? Math.max(0, 1 - (currentT - (o.t + hw50)) / fadeOutMs)
-      : 1;
-    const opacity = fadeIn * fadeOut;
-    const missedAndPast = isMissed && currentT > (o.t + hw50);
-    const stroke = missedAndPast ? "#ff4646" : isMissed ? "var(--accent)" : "#8f86ad";
-    const fill = isMissed ? "rgba(255,102,171,0.15)" : "rgba(200,196,224,0.05)";
-
-    // Slider body first so head + approach ring layer on top.
+    const stroke = isMissed ? "var(--accent)" : "#6a6486";
+    const op = isMissed ? 0.95 : 0.4;
     if (o.k === "s" && o.cp && o.cp.length >= 2) {
       const body = "M " + o.cp.map(([x, y]) => `${x} ${y}`).join(" L ");
-      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.9}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity * 0.28}" />`);
-      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${opacity * 0.9}" />`);
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.9}" stroke-linecap="round" stroke-linejoin="round" opacity="${op * 0.22}" />`);
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op * 0.8}" />`);
       const end = o.cp[o.cp.length - 1];
-      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.6}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${opacity * 0.85}" />`);
+      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.6}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op * 0.7}" />`);
     }
+    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${isMissed ? "rgba(255,102,171,0.12)" : "rgba(200,196,224,0.04)"}" stroke="${stroke}" stroke-width="2" opacity="${op}" />`);
+    // Order label relative to the miss so the reader can follow the pattern.
+    const label = isMissed ? "" : String(o.i - m.objectIndex);
+    if (label) parts.push(`<text x="${o.x}" y="${o.y + 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${stroke}" opacity="${op}">${label}</text>`);
+  }
+  // The missed object gets its judgment radius as a dashed ring on top.
+  parts.push(`<circle cx="${m.objectX}" cy="${m.objectY}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.85" />`);
 
-    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2" opacity="${opacity}" />`);
-
-    // Approach circle: 4r at first appearance, shrinks linearly to r at hit-time,
-    // vanishes after. Same behavior as the game so timing reads naturally.
-    if (currentT < o.t) {
-      const p = 1 - (o.t - currentT) / preempt; // 0 at first-appear, 1 at hit
-      const appR = r + (4 * r - r) * (1 - p);
-      parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${appR}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${opacity * 0.65}" />`);
-    }
-
-    // "MISS" flash on the missed object once its window closes without a hit.
-    if (missedAndPast) {
-      parts.push(`<text x="${o.x}" y="${o.y + 4}" text-anchor="middle" font-size="12" font-weight="700" font-family="Consolas, monospace" fill="#ff4646" opacity="${opacity}">MISS</text>`);
-    }
+  // Full cursor path across the whole window, faint -- the "where did the
+  // aim go" backdrop. Segments with a hit-key held draw brighter.
+  for (let i = 1; i < cursor.length; i++) {
+    const [, x1, y1, k1] = cursor[i - 1];
+    const [, x2, y2] = cursor[i];
+    const held = (k1 & 0b1111) !== 0;
+    parts.push(
+      `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
+        `stroke="${held ? "#9fe8ff" : "#3f5c66"}" stroke-width="${held ? 2 : 1}" ` +
+        `opacity="${held ? 0.85 : 0.4}" stroke-linecap="round" />`
+    );
   }
 
-  // Cursor trail (last ~300ms). Segments where a hit-key is being held
-  // draw brighter/whiter so key-down periods are visually obvious even
-  // without watching the cursor dot itself.
-  if (trail.length >= 2) {
-    for (let i = 1; i < trail.length; i++) {
-      const [t1, x1, y1, k1] = trail[i - 1];
-      const [t2, x2, y2] = trail[i];
-      const held = (k1 & 0b1111) !== 0;
-      parts.push(
-        `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
-          `stroke="${held ? "#ffffff" : "#66d9ff"}" stroke-width="${held ? 2.2 : 1.4}" ` +
-          `opacity="${held ? 0.9 : 0.5}" stroke-linecap="round" />`
-      );
+  // PERSISTENT tap markers -- the key fix. Every tap near the miss gets a
+  // permanent diamond at the exact spot it happened, colored by whether
+  // the aim was on the note (green) or off (red), with its timing offset
+  // labelled. These never disappear, so you study where/when you tapped
+  // instead of trying to catch a flash.
+  for (const tap of (m.taps || [])) {
+    const color = tap.inRadius ? "#6ee7a0" : "#ff4d6d";
+    const d = 7;
+    parts.push(
+      `<path d="M ${tap.x} ${tap.y - d} L ${tap.x + d} ${tap.y} L ${tap.x} ${tap.y + d} L ${tap.x - d} ${tap.y} Z" ` +
+        `fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="1.6" />`
+    );
+    // A short leader line to the note center so "how far off" is spatially obvious.
+    if (!tap.inRadius) {
+      parts.push(`<line x1="${tap.x}" y1="${tap.y}" x2="${m.objectX}" y2="${m.objectY}" stroke="${color}" stroke-width="0.8" stroke-dasharray="3 3" opacity="0.45" />`);
     }
+    parts.push(`<text x="${tap.x}" y="${tap.y - d - 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${color}">${tap.dOffset >= 0 ? "+" : ""}${tap.dOffset}ms</text>`);
   }
-  // Cursor dot at the playhead. Grows and gains a bright ring when
-  // a hit-key is held, and adds an extra flash ring on the exact
-  // rising-edge frame so taps are visually unmissable.
+
+  document.getElementById("missBaseGroup").innerHTML = parts.join("");
+}
+
+function renderMissPlayback() {
+  const { miss: m, stats, cursor, objects, currentT } = missPlayer;
+  if (!m) return;
+  const r = stats.circleRadiusOsuPx;
+  const preempt = stats.preemptMs || 1200;
+
+  const cursorAt = cursorPositionAt(cursor, currentT);
+  const keysNow = cursorKeysAt(cursor, currentT);
+
+  const parts = [];
+
+  // Approach circles for objects currently approaching -- gives the sense
+  // of the beat arriving. Only the shrinking ring animates; the object
+  // itself is already drawn (persistently) in the base layer.
+  for (const o of objects) {
+    if (currentT >= o.t || currentT < o.t - preempt) continue;
+    const isMissed = o.i === m.objectIndex;
+    const stroke = isMissed ? "var(--accent)" : "#b9b2d6";
+    const p = 1 - (o.t - currentT) / preempt; // 0 at first-appear, 1 at hit
+    const appR = r + (4 * r - r) * (1 - p);
+    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${appR}" fill="none" stroke="${stroke}" stroke-width="1.4" opacity="0.75" />`);
+  }
+
+  // Live cursor dot at the playhead -- white + ringed while a key is held.
   if (cursorAt) {
     const held = (keysNow & 0b1111) !== 0;
-    const dotFill = held ? "#ffffff" : "#66d9ff";
     const dotR = held ? 6 : 5;
-    parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR}" fill="${dotFill}" stroke="#0e0c14" stroke-width="1.5" />`);
-    if (held) {
-      parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR + 4}" fill="none" stroke="#ffffff" stroke-width="1.2" opacity="0.8" />`);
-    }
-    if (justPressed) {
-      const age = (currentT - justPressed.t) / 60;
-      const flashR = dotR + 4 + age * 16;
-      parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${flashR}" fill="none" stroke="#ffcf40" stroke-width="2" opacity="${1 - age}" />`);
-    }
+    parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR}" fill="${held ? "#ffffff" : "#66d9ff"}" stroke="#0e0c14" stroke-width="1.5" />`);
+    if (held) parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR + 4}" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="0.85" />`);
   }
 
-  svg.innerHTML = parts.join("");
+  document.getElementById("missOverlayGroup").innerHTML = parts.join("");
   $("#missPlayTime").textContent = `t = ${formatOffsetMs(currentT - m.objectTime)} (${formatMs(currentT)})`;
   updateTimingStripPlayhead();
 }
