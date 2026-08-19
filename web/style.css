@@ -123,8 +123,18 @@ body {
   transition: color .15s, background .15s;
 }
 .tab-btn:hover { color: var(--text); }
-.tab-btn.active { color: #fff; background: linear-gradient(180deg, var(--accent), var(--accent-dim)); box-shadow: var(--shadow-sm); }
+.tab-btn.active {
+  color: var(--accent-2);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+}
 .tab-content.hidden { display: none; }
+.tab-content { animation: fadeUp .22s ease both; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
 
 .dropzone {
   border: 1.5px dashed var(--border);
@@ -249,24 +259,53 @@ body {
   background-clip: padding-box;
 }
 .settings-panel::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
-.opt-group { margin-bottom: 18px; }
-.opt-group h3 {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--accent);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 6px;
-  margin: 0 0 10px;
+.opt-group {
+  margin-bottom: 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  overflow: hidden;
 }
+.opt-group-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  background: transparent;
+  border: none;
+  color: var(--accent-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s;
+}
+.opt-group-header:hover { background: rgba(255, 255, 255, 0.02); }
+.opt-group-caret {
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform .18s;
+}
+.opt-group.collapsed .opt-group-caret { transform: rotate(-90deg); }
+.opt-group-body {
+  padding: 4px 14px 12px;
+  animation: fadeUp .2s ease both;
+}
+.opt-group.collapsed .opt-group-body { display: none; }
 .opt-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 6px 0;
+  padding: 7px 0;
   font-size: 13px;
+  border-top: 1px solid var(--border-soft);
 }
+.opt-row:first-child { border-top: none; }
 .opt-row label.opt-label { color: var(--text); flex: 1; }
 .opt-row .opt-control { display: flex; align-items: center; gap: 8px; }
 .opt-row input[type="range"] { width: 130px; }
@@ -278,8 +317,43 @@ body {
    still visible when the dropdown is opened. */
 .opt-row select { min-width: 0; max-width: 210px; }
 
+/* Checkboxes rendered as compact toggle switches -- reads far calmer than
+   a column of raw ticks. */
 input[type="checkbox"] {
-  width: 18px; height: 18px; accent-color: var(--accent);
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: pointer;
+  transition: background .18s, border-color .18s;
+}
+input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform .18s, background .18s;
+}
+input[type="checkbox"]:checked {
+  background: linear-gradient(180deg, var(--accent), var(--accent-dim));
+  border-color: transparent;
+}
+input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .status-panel { position: sticky; top: 16px; }
@@ -421,10 +495,14 @@ input[type="checkbox"] {
 
 /* Miss analyzer */
 .miss-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   padding: 20px;
 }
+/* Compact, detached input card -- not full-bleed across a 1440p screen. */
+.miss-input-panel { max-width: 640px; width: 100%; }
+.miss-results-panel { animation: fadeUp .25s ease both; }
 .miss-src-btn {
   flex: 1;
   padding: 8px;
@@ -439,19 +517,24 @@ input[type="checkbox"] {
   transition: color .15s, background .15s;
 }
 .miss-src-btn:hover { color: var(--text); }
-.miss-src-btn.active { color: #fff; background: linear-gradient(180deg, var(--accent), var(--accent-dim)); box-shadow: var(--shadow-sm); }
+.miss-src-btn.active {
+  color: var(--accent-2);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+}
 .miss-src-content.hidden { display: none; }
 .miss-src-content { margin-bottom: 8px; }
-.miss-panel h2 .pill {
+.pill {
   display: inline-block;
-  margin-left: 8px;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 10px;
-  letter-spacing: 0.05em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
   vertical-align: middle;
 }
 .miss-baseplate { margin-top: 16px; }

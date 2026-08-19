@@ -136,14 +136,12 @@
 
   <div class="main-tab-content hidden" data-main-tab-content="miss">
     <main class="miss-layout">
-      <section class="panel miss-panel">
+      <section class="panel miss-input-panel">
         <h2>Miss analyzer</h2>
         <p class="hint">
-          Drop a .osr replay -- the coordinator parses the LZMA-compressed
-          cursor stream, downloads the matching beatmap (cached with the
-          render pipeline), and lists every hit object where no key-press
-          landed inside the circle within the OD-derived 50 window.
-          Sliders are judged as their head; spinners are skipped.
+          Drop a .osr replay (or paste a score URL). Every hit-circle and
+          slider-head with no key-press inside its circle in the OD-derived
+          50 window is flagged; spinners are skipped.
         </p>
         <div class="input-tabs">
           <button class="miss-src-btn active" data-miss-src="upload">Upload .osr</button>
@@ -165,7 +163,9 @@
         </div>
         <div id="missReplayInfo" class="replay-info hidden"></div>
         <div id="missStatus" class="hint"></div>
-        <div id="missResults" class="miss-results hidden">
+      </section>
+
+      <section id="missResults" class="panel miss-results-panel hidden">
           <div class="miss-summary">
             <div id="missSummaryText" class="miss-count"></div>
             <div id="missSummaryStats" class="hint"></div>
@@ -211,7 +211,6 @@
               </p>
             </div>
           </div>
-        </div>
       </section>
     </main>
   </div>

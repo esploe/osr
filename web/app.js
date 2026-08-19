@@ -214,12 +214,23 @@ function wireSkinUpload() {
 function buildSettingsForm() {
   const root = $("#settingsGroups");
   root.innerHTML = "";
-  for (const group of state.config.groups) {
+  state.config.groups.forEach((group, gi) => {
     const groupEl = document.createElement("div");
     groupEl.className = "opt-group";
-    const h3 = document.createElement("h3");
-    h3.textContent = group.label;
-    groupEl.appendChild(h3);
+
+    // Collapsible header. First group open by default, the rest collapsed
+    // so the panel isn't a wall of controls -- expand what you need.
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "opt-group-header";
+    header.innerHTML = `<span class="opt-group-caret">▾</span><span>${escapeHtml(group.label)}</span>`;
+    const body = document.createElement("div");
+    body.className = "opt-group-body";
+    header.addEventListener("click", () => groupEl.classList.toggle("collapsed"));
+    if (gi !== 0) groupEl.classList.add("collapsed");
+
+    groupEl.appendChild(header);
+    groupEl.appendChild(body);
 
     for (const field of group.fields) {
       if (field.key === "skinName") continue; // rendered separately in the input panel
@@ -236,12 +247,12 @@ function buildSettingsForm() {
       control.className = "opt-control";
       control.appendChild(buildControl(field));
       row.appendChild(control);
-      groupEl.appendChild(row);
+      body.appendChild(row);
 
       if (field.showIf) applyShowIf(row, field.showIf);
     }
     root.appendChild(groupEl);
-  }
+  });
 }
 
 function buildControl(field) {
