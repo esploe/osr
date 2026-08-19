@@ -714,13 +714,14 @@ async function runMissAnalysis(doFetch) {
     const res = await doFetch();
     const text = await res.text();
     if (!res.ok) {
+      // Error body is JSON ({error}) for known-shape failures, plain text
+      // for 500s. Prefer the JSON message; fall back to the raw text.
+      let msg = text;
       try {
         const j = JSON.parse(text);
-        throw new Error(j.error || text);
-      } catch (e) {
-        if (e.message && e.message !== text) throw e;
-        throw new Error(text);
-      }
+        if (j && j.error) msg = j.error;
+      } catch { /* not JSON -- use the raw text as-is */ }
+      throw new Error(msg);
     }
     renderMissResults(JSON.parse(text));
     status.textContent = "";

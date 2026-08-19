@@ -47,11 +47,18 @@ const MODES = ["osu", "taiko", "fruits", "mania"];
  * Returns { scoreId } for use with the /scores/{id}/download endpoint.
  */
 export function parseScoreUrl(input) {
+  const trimmed = String(input).trim();
+
+  // Bare numeric score id -- people often just paste the number.
+  if (/^\d+$/.test(trimmed)) {
+    return { scoreId: trimmed };
+  }
+
   let url;
   try {
-    url = new URL(input);
+    url = new URL(trimmed);
   } catch {
-    throw new Error(`Not a valid URL: ${input}`);
+    throw new Error(`Not a valid URL or score id: ${input}`);
   }
   if (!/(^|\.)osu\.ppy\.sh$/.test(url.hostname)) {
     throw new Error("Only osu.ppy.sh score URLs are supported.");
@@ -59,7 +66,10 @@ export function parseScoreUrl(input) {
   const parts = url.pathname.split("/").filter(Boolean);
   const scoresIdx = parts.indexOf("scores");
   if (scoresIdx === -1) {
-    throw new Error("URL doesn't look like a score link (expected .../scores/<id>).");
+    throw new Error(
+      `That's not a score link. Expected osu.ppy.sh/scores/<id> (open the specific play and copy its URL). ` +
+        `Beatmap, beatmapset, and profile links don't identify a single score.`
+    );
   }
   const rest = parts.slice(scoresIdx + 1);
   let scoreId;
