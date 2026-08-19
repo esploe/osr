@@ -698,6 +698,7 @@ const missPlayer = {
   objects: [], // context objects sorted by hit-time
   tMin: 0,
   tMax: 0,
+  playStart: 0,
   currentT: 0,
   playing: false,
   speed: 0.5,
@@ -726,6 +727,16 @@ function selectMiss(misses, index, stats) {
   const ctx = m.context || { objects: [], cursor: [], windowStart: m.objectTime - 1500, windowEnd: m.objectTime + 500 };
   const tMin = ctx.windowStart ?? m.objectTime - 3000;
   const tMax = ctx.windowEnd ?? m.objectTime + 1500;
+  // Where Play/Restart begin -- just the approach into the miss, not 3s
+  // of empty lead-in. Scrub can still reach the full tMin..tMax range.
+  const preempt = stats.preemptMs || 1200;
+  const playStart = Math.max(tMin, m.objectTime - preempt - 300);
+
+  // Stop any in-flight playback from the previously-selected miss.
+  if (missPlayer.playing) {
+    missPlayer.playing = false;
+    cancelAnimationFrame(missPlayer.rafId);
+  }
 
   Object.assign(missPlayer, {
     miss: m,
@@ -734,26 +745,24 @@ function selectMiss(misses, index, stats) {
     objects: ctx.objects.slice().sort((a, b) => a.t - b.t),
     tMin,
     tMax,
-    currentT: tMin,
+    playStart,
+    // Land ON the miss moment, paused. This is the "money frame": the
+    // note, the cursor's approach into it, and the tap(s) are all right
+    // there to read without pressing anything.
+    currentT: m.objectTime,
     lastRafWall: 0,
   });
+  $("#missPlayBtn").textContent = "▶ Play";
 
   renderTimingStrip();
-  renderMissBaseLayer();
 
   const scrub = $("#missScrub");
   scrub.min = tMin;
   scrub.max = tMax;
   scrub.step = 5;
-  scrub.value = tMin;
+  scrub.value = m.objectTime;
 
   renderMissPlayback();
-  autoPlayFromStart();
-}
-
-function autoPlayFromStart() {
-  missPlayer.currentT = missPlayer.tMin;
-  if (!missPlayer.playing) togglePlay();
 }
 
 function togglePlay() {
@@ -785,106 +794,103 @@ function tickPlayback(now) {
   missPlayer.rafId = requestAnimationFrame(tickPlayback);
 }
 
-// The playfield is drawn in two layers:
-//   * a PERSISTENT base layer (all nearby objects, the full cursor path,
-//     and permanent tap markers) that never changes as time advances --
-//     so a paused / scrubbed frame always shows the whole moment and the
-//     taps stay put to be studied instead of flashing by; and
-//   * a time-driven overlay (approach circles, the live cursor dot) that
-//     rides on top to give the sense of motion during Play.
-// The base layer is rebuilt only when the selected miss changes; the
-// overlay is rebuilt every frame. They're kept in two <g> groups so the
-// per-frame work is just swapping the small overlay group.
-function renderMissBaseLayer() {
-  const { miss: m, stats, cursor, objects } = missPlayer;
-  if (!m) return;
-  const r = stats.circleRadiusOsuPx;
-
-  const parts = [];
-  parts.push(`<rect x="-128" y="-96" width="768" height="576" fill="#0e0c14" />`);
-  parts.push(`<rect x="0" y="0" width="512" height="384" fill="none" stroke="var(--border)" stroke-width="1" opacity="0.55" />`);
-
-  // All nearby objects, ghosted -- the missed one highlighted. Drawn once,
-  // always visible, so the pattern is legible even paused between notes.
-  const objectsByTime = objects.slice().sort((a, b) => a.t - b.t);
-  for (const o of objectsByTime) {
-    const isMissed = o.i === m.objectIndex;
-    const stroke = isMissed ? "var(--accent)" : "#6a6486";
-    const op = isMissed ? 0.95 : 0.4;
-    if (o.k === "s" && o.cp && o.cp.length >= 2) {
-      const body = "M " + o.cp.map(([x, y]) => `${x} ${y}`).join(" L ");
-      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.9}" stroke-linecap="round" stroke-linejoin="round" opacity="${op * 0.22}" />`);
-      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op * 0.8}" />`);
-      const end = o.cp[o.cp.length - 1];
-      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.6}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op * 0.7}" />`);
-    }
-    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${isMissed ? "rgba(255,102,171,0.12)" : "rgba(200,196,224,0.04)"}" stroke="${stroke}" stroke-width="2" opacity="${op}" />`);
-    // Order label relative to the miss so the reader can follow the pattern.
-    const label = isMissed ? "" : String(o.i - m.objectIndex);
-    if (label) parts.push(`<text x="${o.x}" y="${o.y + 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${stroke}" opacity="${op}">${label}</text>`);
-  }
-  // The missed object gets its judgment radius as a dashed ring on top.
-  parts.push(`<circle cx="${m.objectX}" cy="${m.objectY}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.85" />`);
-
-  // Full cursor path across the whole window, faint -- the "where did the
-  // aim go" backdrop. Segments with a hit-key held draw brighter.
-  for (let i = 1; i < cursor.length; i++) {
-    const [, x1, y1, k1] = cursor[i - 1];
-    const [, x2, y2] = cursor[i];
-    const held = (k1 & 0b1111) !== 0;
-    parts.push(
-      `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
-        `stroke="${held ? "#9fe8ff" : "#3f5c66"}" stroke-width="${held ? 2 : 1}" ` +
-        `opacity="${held ? 0.85 : 0.4}" stroke-linecap="round" />`
-    );
-  }
-
-  // PERSISTENT tap markers -- the key fix. Every tap near the miss gets a
-  // permanent diamond at the exact spot it happened, colored by whether
-  // the aim was on the note (green) or off (red), with its timing offset
-  // labelled. These never disappear, so you study where/when you tapped
-  // instead of trying to catch a flash.
-  for (const tap of (m.taps || [])) {
-    const color = tap.inRadius ? "#6ee7a0" : "#ff4d6d";
-    const d = 7;
-    parts.push(
-      `<path d="M ${tap.x} ${tap.y - d} L ${tap.x + d} ${tap.y} L ${tap.x} ${tap.y + d} L ${tap.x - d} ${tap.y} Z" ` +
-        `fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="1.6" />`
-    );
-    // A short leader line to the note center so "how far off" is spatially obvious.
-    if (!tap.inRadius) {
-      parts.push(`<line x1="${tap.x}" y1="${tap.y}" x2="${m.objectX}" y2="${m.objectY}" stroke="${color}" stroke-width="0.8" stroke-dasharray="3 3" opacity="0.45" />`);
-    }
-    parts.push(`<text x="${tap.x}" y="${tap.y - d - 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${color}">${tap.dOffset >= 0 ? "+" : ""}${tap.dOffset}ms</text>`);
-  }
-
-  document.getElementById("missBaseGroup").innerHTML = parts.join("");
-}
+// Single windowed renderer. Everything is drawn relative to the current
+// playhead with a moderate fade window -- like a sane approach rate, not
+// the AR0 "everything on screen forever" clutter and not the old
+// too-fast 200ms flash. A paused frame shows the ~1s around the playhead:
+// the notes in play, the cursor's recent path, and the taps that happened
+// nearby -- enough to read the miss, little enough to stay legible.
+const TRAIL_MS = 650;       // how far back the cursor trail reaches
+const OBJ_FADE_OUT_MS = 450; // how long an object lingers after its hit window
+const TAP_FADE_MS = 900;     // how long a tap marker stays visible after it happens
 
 function renderMissPlayback() {
   const { miss: m, stats, cursor, objects, currentT } = missPlayer;
   if (!m) return;
   const r = stats.circleRadiusOsuPx;
   const preempt = stats.preemptMs || 1200;
-
-  const cursorAt = cursorPositionAt(cursor, currentT);
-  const keysNow = cursorKeysAt(cursor, currentT);
+  const hw50 = stats.hitWindow50Ms || 150;
 
   const parts = [];
+  parts.push(`<rect x="-128" y="-96" width="768" height="576" fill="#0e0c14" />`);
+  parts.push(`<rect x="0" y="0" width="512" height="384" fill="none" stroke="var(--border)" stroke-width="1" opacity="0.45" />`);
 
-  // Approach circles for objects currently approaching -- gives the sense
-  // of the beat arriving. Only the shrinking ring animates; the object
-  // itself is already drawn (persistently) in the base layer.
+  // Objects within the visible window (approach -> shortly after hit).
   for (const o of objects) {
-    if (currentT >= o.t || currentT < o.t - preempt) continue;
+    const showFrom = o.t - preempt;
+    const objEnd = (o.k === "s" ? (o.et ?? o.t) : o.t) + hw50;
+    const showUntil = objEnd + OBJ_FADE_OUT_MS;
+    if (currentT < showFrom || currentT > showUntil) continue;
+
     const isMissed = o.i === m.objectIndex;
-    const stroke = isMissed ? "var(--accent)" : "#b9b2d6";
-    const p = 1 - (o.t - currentT) / preempt; // 0 at first-appear, 1 at hit
-    const appR = r + (4 * r - r) * (1 - p);
-    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${appR}" fill="none" stroke="${stroke}" stroke-width="1.4" opacity="0.75" />`);
+    const fadeIn = Math.min(1, (currentT - showFrom) / 250);
+    const fadeOut = currentT > objEnd ? Math.max(0, 1 - (currentT - objEnd) / OBJ_FADE_OUT_MS) : 1;
+    const op = fadeIn * fadeOut;
+    const missedAndPast = isMissed && currentT > o.t + hw50;
+    const stroke = missedAndPast ? "#ff4646" : isMissed ? "var(--accent)" : "#9b93bd";
+
+    if (o.k === "s" && o.cp && o.cp.length >= 2) {
+      const body = "M " + o.cp.map(([x, y]) => `${x} ${y}`).join(" L ");
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.9}" stroke-linecap="round" stroke-linejoin="round" opacity="${op * 0.25}" />`);
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op * 0.85}" />`);
+      const end = o.cp[o.cp.length - 1];
+      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.6}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${op * 0.75}" />`);
+    }
+    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${isMissed ? "rgba(255,102,171,0.12)" : "rgba(200,196,224,0.04)"}" stroke="${stroke}" stroke-width="2" opacity="${op}" />`);
+
+    // Approach ring (4r -> r) while the note is still approaching.
+    if (currentT < o.t) {
+      const appR = r + 3 * r * ((o.t - currentT) / preempt);
+      parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${appR}" fill="none" stroke="${stroke}" stroke-width="1.3" opacity="${op * 0.7}" />`);
+    }
+    if (missedAndPast) {
+      parts.push(`<text x="${o.x}" y="${o.y + 4}" text-anchor="middle" font-size="12" font-weight="700" font-family="Consolas, monospace" fill="#ff4646" opacity="${op}">MISS</text>`);
+    }
   }
 
-  // Live cursor dot at the playhead -- white + ringed while a key is held.
+  // Cursor trail: last TRAIL_MS, opacity decaying with age. Held-key
+  // segments draw thicker/whiter so tapping is visible in the motion.
+  const trailFrom = currentT - TRAIL_MS;
+  let prevPt = null;
+  for (const f of cursor) {
+    if (f[0] < trailFrom) { prevPt = f; continue; }
+    if (f[0] > currentT) break;
+    if (prevPt) {
+      const age = (currentT - f[0]) / TRAIL_MS; // 0 = now, 1 = oldest
+      const op = 0.15 + 0.7 * (1 - age);
+      const held = (prevPt[3] & 0b1111) !== 0;
+      parts.push(
+        `<line x1="${prevPt[1]}" y1="${prevPt[2]}" x2="${f[1]}" y2="${f[2]}" ` +
+          `stroke="${held ? "#ffffff" : "#66d9ff"}" stroke-width="${held ? 2.4 : 1.4}" ` +
+          `opacity="${held ? Math.min(1, op + 0.2) : op}" stroke-linecap="round" />`
+      );
+    }
+    prevPt = f;
+  }
+
+  // Tap markers within TAP_FADE_MS of the playhead -- diamonds at the
+  // exact tap position, fading as they age so they linger long enough to
+  // read but don't pile up into permanent clutter. Green = aim on the
+  // note, red (+ leader line) = off.
+  for (const tap of (m.taps || [])) {
+    const age = currentT - tap.t;
+    if (age < 0 || age > TAP_FADE_MS) continue;
+    const op = 0.25 + 0.75 * (1 - age / TAP_FADE_MS);
+    const color = tap.inRadius ? "#6ee7a0" : "#ff4d6d";
+    const d = 7;
+    parts.push(
+      `<path d="M ${tap.x} ${tap.y - d} L ${tap.x + d} ${tap.y} L ${tap.x} ${tap.y + d} L ${tap.x - d} ${tap.y} Z" ` +
+        `fill="${color}" fill-opacity="${op * 0.3}" stroke="${color}" stroke-width="1.8" opacity="${op}" />`
+    );
+    if (!tap.inRadius) {
+      parts.push(`<line x1="${tap.x}" y1="${tap.y}" x2="${m.objectX}" y2="${m.objectY}" stroke="${color}" stroke-width="0.9" stroke-dasharray="3 3" opacity="${op * 0.55}" />`);
+    }
+    parts.push(`<text x="${tap.x}" y="${tap.y - d - 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${color}" opacity="${op}">${tap.dOffset >= 0 ? "+" : ""}${tap.dOffset}ms</text>`);
+  }
+
+  // Live cursor dot at the playhead.
+  const cursorAt = cursorPositionAt(cursor, currentT);
+  const keysNow = cursorKeysAt(cursor, currentT);
   if (cursorAt) {
     const held = (keysNow & 0b1111) !== 0;
     const dotR = held ? 6 : 5;
@@ -892,7 +898,8 @@ function renderMissPlayback() {
     if (held) parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR + 4}" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="0.85" />`);
   }
 
-  document.getElementById("missOverlayGroup").innerHTML = parts.join("");
+  document.getElementById("missBaseGroup").innerHTML = parts.join("");
+  document.getElementById("missOverlayGroup").innerHTML = "";
   $("#missPlayTime").textContent = `t = ${formatOffsetMs(currentT - m.objectTime)} (${formatMs(currentT)})`;
   updateTimingStripPlayhead();
 }
@@ -980,18 +987,6 @@ function cursorKeysAt(cursor, t) {
   return cursor[lo][3] || 0;
 }
 
-function cursorJustPressed(cursor, t, withinMs) {
-  // Look backwards for a rising-edge press within `withinMs` of t.
-  for (let i = cursor.length - 1; i > 0; i--) {
-    const ft = cursor[i][0];
-    if (ft > t) continue;
-    if (t - ft > withinMs) return null;
-    const pressed = (cursor[i][3] || 0) & 0b1111 & ~((cursor[i - 1][3] || 0) & 0b1111);
-    if (pressed) return { t: ft, keys: pressed };
-  }
-  return null;
-}
-
 function cursorPositionAt(cursor, t) {
   if (!cursor.length) return null;
   if (t <= cursor[0][0]) return { x: cursor[0][1], y: cursor[0][2] };
@@ -1012,17 +1007,6 @@ function cursorPositionAt(cursor, t) {
   return { x: x1 + (x2 - x1) * a, y: y1 + (y2 - y1) * a };
 }
 
-function cursorTrail(cursor, t, windowMs) {
-  const from = t - windowMs;
-  const out = [];
-  for (const f of cursor) {
-    if (f[0] < from) continue;
-    if (f[0] > t) break;
-    out.push(f);
-  }
-  return out;
-}
-
 function formatOffsetMs(ms) {
   const sign = ms >= 0 ? "+" : "−";
   return `${sign}${Math.abs(ms / 1000).toFixed(2)}s`;
@@ -1031,17 +1015,19 @@ function formatOffsetMs(ms) {
 function wireMissPlayer() {
   $("#missPlayBtn").addEventListener("click", () => {
     if (!missPlayer.miss) return;
-    // If we're paused at the end, restart from the beginning instead of
-    // playing zero seconds and stopping again.
-    if (!missPlayer.playing && missPlayer.currentT >= missPlayer.tMax) {
-      missPlayer.currentT = missPlayer.tMin;
+    // Starting a fresh play from a resting/ended position rewinds to the
+    // approach start so you watch the run-in, not zero seconds from wherever.
+    if (!missPlayer.playing && missPlayer.currentT >= missPlayer.tMax - 1) {
+      missPlayer.currentT = missPlayer.playStart;
+      $("#missScrub").value = missPlayer.playStart;
+      renderMissPlayback();
     }
     togglePlay();
   });
   $("#missRestartBtn").addEventListener("click", () => {
     if (!missPlayer.miss) return;
-    missPlayer.currentT = missPlayer.tMin;
-    $("#missScrub").value = missPlayer.tMin;
+    missPlayer.currentT = missPlayer.playStart;
+    $("#missScrub").value = missPlayer.playStart;
     renderMissPlayback();
     if (!missPlayer.playing) togglePlay();
   });
