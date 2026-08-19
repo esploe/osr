@@ -26,6 +26,7 @@ async function init() {
   wireProfileButtons();
   wireJobsTab();
   wireMissAnalyzer();
+  wireMissPlayer();
 }
 
 function wireMainTabs() {
@@ -682,6 +683,22 @@ function renderMissResults(data) {
   $("#missResults").classList.remove("hidden");
 }
 
+// Miss-playback state -- one player instance shared across all misses so
+// switching between them cancels the previous rAF loop cleanly.
+const missPlayer = {
+  miss: null,
+  stats: null,
+  cursor: [], // [[t,x,y],...] already sorted by t (server emits in order)
+  objects: [], // context objects sorted by hit-time
+  tMin: 0,
+  tMax: 0,
+  currentT: 0,
+  playing: false,
+  speed: 0.5,
+  lastRafWall: 0,
+  rafId: 0,
+};
+
 function selectMiss(misses, index, stats) {
   document.querySelectorAll("#missList .miss-list-item").forEach((li, i) => {
     li.classList.toggle("selected", i === index);
@@ -690,75 +707,202 @@ function selectMiss(misses, index, stats) {
   if (!m) return;
   $("#missSelectedLabel").textContent = `#${m.objectIndex} @ ${formatMs(m.objectTime)}`;
 
+  const ctx = m.context || { objects: [], cursor: [], windowStart: m.objectTime - 1500, windowEnd: m.objectTime + 500 };
+  const tMin = ctx.windowStart ?? m.objectTime - 3000;
+  const tMax = ctx.windowEnd ?? m.objectTime + 1500;
+
+  Object.assign(missPlayer, {
+    miss: m,
+    stats,
+    cursor: ctx.cursor.slice().sort((a, b) => a[0] - b[0]),
+    objects: ctx.objects.slice().sort((a, b) => a.t - b.t),
+    tMin,
+    tMax,
+    currentT: tMin,
+    lastRafWall: 0,
+  });
+
+  const scrub = $("#missScrub");
+  scrub.min = tMin;
+  scrub.max = tMax;
+  scrub.step = 5;
+  scrub.value = tMin;
+
+  renderMissPlayback();
+  autoPlayFromStart();
+}
+
+function autoPlayFromStart() {
+  missPlayer.currentT = missPlayer.tMin;
+  if (!missPlayer.playing) togglePlay();
+}
+
+function togglePlay() {
+  missPlayer.playing = !missPlayer.playing;
+  $("#missPlayBtn").textContent = missPlayer.playing ? "⏸ Pause" : "▶ Play";
+  if (missPlayer.playing) {
+    missPlayer.lastRafWall = performance.now();
+    missPlayer.rafId = requestAnimationFrame(tickPlayback);
+  } else {
+    cancelAnimationFrame(missPlayer.rafId);
+  }
+}
+
+function tickPlayback(now) {
+  if (!missPlayer.playing) return;
+  const dtWall = now - missPlayer.lastRafWall;
+  missPlayer.lastRafWall = now;
+  // Advance replay time by real-time * speed. Clamp to window end and
+  // auto-pause when we reach it so the user isn't stuck watching a
+  // frozen frame that they thought was still playing.
+  missPlayer.currentT = Math.min(missPlayer.tMax, missPlayer.currentT + dtWall * missPlayer.speed);
+  $("#missScrub").value = missPlayer.currentT;
+  renderMissPlayback();
+  if (missPlayer.currentT >= missPlayer.tMax) {
+    missPlayer.playing = false;
+    $("#missPlayBtn").textContent = "▶ Play";
+    return;
+  }
+  missPlayer.rafId = requestAnimationFrame(tickPlayback);
+}
+
+function renderMissPlayback() {
+  const { miss: m, stats, cursor, objects, currentT, tMin, tMax } = missPlayer;
+  if (!m) return;
+
   const svg = $("#missPlayfield");
   const r = stats.circleRadiusOsuPx;
-  const ctx = m.context || { objects: [], cursor: [] };
+  const preempt = stats.preemptMs || 1200;
+  const hw50 = stats.hitWindow50Ms || 150;
+  const fadeOutMs = 200; // how long a passed object takes to fade after its window closes
 
-  // Sort context objects so past objects render first (below) and the
-  // missed one renders last (on top). Also lets us pick a per-object
-  // style from its time relative to the miss.
-  const objectsSorted = ctx.objects.slice().sort((a, b) => a.t - b.t);
-  const missT = m.objectTime;
-
-  // Cursor polyline for the whole context window. Highlight the segment
-  // right around the miss's own hit time so the reader's eye lands there.
-  const cursorPts = ctx.cursor;
-  const preMiss = [], postMiss = [];
-  for (const [t, x, y] of cursorPts) (t <= missT ? preMiss : postMiss).push([x, y]);
-  const pathD = (pts) => pts.length ? "M " + pts.map(([x, y]) => `${x} ${y}`).join(" L ") : "";
-
-  // Small tick marks on the cursor path every ~150ms so timing is legible.
-  const tickMarks = [];
-  let lastTickT = -Infinity;
-  for (const [t, x, y] of cursorPts) {
-    if (t - lastTickT >= 150) {
-      tickMarks.push(`<circle cx="${x}" cy="${y}" r="1.5" fill="var(--text-dim)" opacity="0.55" />`);
-      lastTickT = t;
-    }
-  }
+  // Cursor position at currentT: linear interpolation between straddling frames.
+  const cursorAt = cursorPositionAt(cursor, currentT);
+  const trail = cursorTrail(cursor, currentT, 300);
 
   const parts = [];
   parts.push(`<rect x="0" y="0" width="512" height="384" fill="#0e0c14" />`);
 
-  // Nearby hit objects: fade older-first, tint approaching ones by accent color.
-  for (const o of objectsSorted) {
-    const isMissed = o.i === m.objectIndex;
-    const dt = o.t - missT; // negative = already past
-    // Opacity: peaks near the miss time, fades either side of the ±1500ms window.
-    const fadeIn = dt < 0 ? Math.max(0, 1 + dt / 1500) : Math.max(0, 1 - dt / 1500);
-    const opacity = isMissed ? 1 : 0.25 + 0.55 * fadeIn;
-    const stroke = isMissed ? "var(--accent)" : dt < 0 ? "#5a5273" : "#8f86ad";
-    const fill = isMissed ? "rgba(255,102,171,0.15)" : "rgba(255,255,255,0.03)";
+  for (const o of objects) {
+    // Is this object visible right now?
+    const showFrom = o.t - preempt;
+    const showUntil = (o.k === "s" ? (o.et ?? o.t) : o.t) + hw50 + fadeOutMs;
+    if (currentT < showFrom || currentT > showUntil) continue;
 
+    const isMissed = o.i === m.objectIndex;
+    // Base opacity: fade in over first 200ms of the approach window,
+    // hold full while active, fade out after hit-window closes.
+    const fadeIn = Math.min(1, (currentT - showFrom) / 200);
+    const fadeOut = currentT > (o.t + hw50)
+      ? Math.max(0, 1 - (currentT - (o.t + hw50)) / fadeOutMs)
+      : 1;
+    const opacity = fadeIn * fadeOut;
+    const missedAndPast = isMissed && currentT > (o.t + hw50);
+    const stroke = missedAndPast ? "#ff4646" : isMissed ? "var(--accent)" : "#8f86ad";
+    const fill = isMissed ? "rgba(255,102,171,0.15)" : "rgba(200,196,224,0.05)";
+
+    // Slider body first so head + approach ring layer on top.
     if (o.k === "s" && o.cp && o.cp.length >= 2) {
       const body = "M " + o.cp.map(([x, y]) => `${x} ${y}`).join(" L ");
-      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.8}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity * 0.35}" />`);
-      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.5" opacity="${opacity}" />`);
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.9}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity * 0.28}" />`);
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${opacity * 0.9}" />`);
       const end = o.cp[o.cp.length - 1];
-      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.5}" fill="none" stroke="${stroke}" stroke-width="1.5" opacity="${opacity}" />`);
+      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.6}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${opacity * 0.85}" />`);
     }
 
     parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2" opacity="${opacity}" />`);
-    // Small number in the middle showing order relative to the miss (0 for the miss itself).
-    const label = isMissed ? "MISS" : String(o.i - m.objectIndex);
-    parts.push(`<text x="${o.x}" y="${o.y + 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${stroke}" opacity="${opacity}">${label}</text>`);
+
+    // Approach circle: 4r at first appearance, shrinks linearly to r at hit-time,
+    // vanishes after. Same behavior as the game so timing reads naturally.
+    if (currentT < o.t) {
+      const p = 1 - (o.t - currentT) / preempt; // 0 at first-appear, 1 at hit
+      const appR = r + (4 * r - r) * (1 - p);
+      parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${appR}" fill="none" stroke="${stroke}" stroke-width="1.2" opacity="${opacity * 0.65}" />`);
+    }
+
+    // "MISS" flash on the missed object once its window closes without a hit.
+    if (missedAndPast) {
+      parts.push(`<text x="${o.x}" y="${o.y + 4}" text-anchor="middle" font-size="12" font-weight="700" font-family="Consolas, monospace" fill="#ff4646" opacity="${opacity}">MISS</text>`);
+    }
   }
 
-  // Missed-object judgment radius (dashed, sits over top).
-  parts.push(`<circle cx="${m.objectX}" cy="${m.objectY}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.85" />`);
-
-  // Cursor path -- pre-miss dimmer, post-miss brighter.
-  parts.push(...tickMarks);
-  if (preMiss.length) parts.push(`<path d="${pathD(preMiss)}" fill="none" stroke="#66d9ff" stroke-width="1.5" opacity="0.5" />`);
-  if (postMiss.length) parts.push(`<path d="${pathD(postMiss)}" fill="none" stroke="#66d9ff" stroke-width="1.8" opacity="0.95" />`);
-
-  // Cursor's closest-approach marker.
-  if (m.cursor) {
-    parts.push(`<line x1="${m.objectX}" y1="${m.objectY}" x2="${m.cursor.x}" y2="${m.cursor.y}" stroke="#66d9ff" stroke-width="1" stroke-dasharray="3 2" opacity="0.8" />`);
-    parts.push(`<circle cx="${m.cursor.x}" cy="${m.cursor.y}" r="4.5" fill="#66d9ff" stroke="#0e0c14" stroke-width="1.5" />`);
+  // Cursor trail (last ~300ms).
+  if (trail.length >= 2) {
+    const d = "M " + trail.map(([_, x, y]) => `${x} ${y}`).join(" L ");
+    parts.push(`<path d="${d}" fill="none" stroke="#66d9ff" stroke-width="1.5" opacity="0.55" />`);
+  }
+  // Cursor dot at the playhead.
+  if (cursorAt) {
+    parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="5" fill="#66d9ff" stroke="#0e0c14" stroke-width="1.5" />`);
   }
 
   svg.innerHTML = parts.join("");
+  $("#missPlayTime").textContent = `t = ${formatOffsetMs(currentT - m.objectTime)} (${formatMs(currentT)})`;
+}
+
+function cursorPositionAt(cursor, t) {
+  if (!cursor.length) return null;
+  if (t <= cursor[0][0]) return { x: cursor[0][1], y: cursor[0][2] };
+  if (t >= cursor[cursor.length - 1][0]) {
+    const last = cursor[cursor.length - 1];
+    return { x: last[1], y: last[2] };
+  }
+  // Binary search for the first frame with time > t.
+  let lo = 0, hi = cursor.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cursor[mid][0] <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  const [t1, x1, y1] = cursor[lo - 1];
+  const [t2, x2, y2] = cursor[lo];
+  const a = t2 === t1 ? 0 : (t - t1) / (t2 - t1);
+  return { x: x1 + (x2 - x1) * a, y: y1 + (y2 - y1) * a };
+}
+
+function cursorTrail(cursor, t, windowMs) {
+  const from = t - windowMs;
+  const out = [];
+  for (const f of cursor) {
+    if (f[0] < from) continue;
+    if (f[0] > t) break;
+    out.push(f);
+  }
+  return out;
+}
+
+function formatOffsetMs(ms) {
+  const sign = ms >= 0 ? "+" : "−";
+  return `${sign}${Math.abs(ms / 1000).toFixed(2)}s`;
+}
+
+function wireMissPlayer() {
+  $("#missPlayBtn").addEventListener("click", () => {
+    if (!missPlayer.miss) return;
+    // If we're paused at the end, restart from the beginning instead of
+    // playing zero seconds and stopping again.
+    if (!missPlayer.playing && missPlayer.currentT >= missPlayer.tMax) {
+      missPlayer.currentT = missPlayer.tMin;
+    }
+    togglePlay();
+  });
+  $("#missRestartBtn").addEventListener("click", () => {
+    if (!missPlayer.miss) return;
+    missPlayer.currentT = missPlayer.tMin;
+    $("#missScrub").value = missPlayer.tMin;
+    renderMissPlayback();
+    if (!missPlayer.playing) togglePlay();
+  });
+  $("#missSpeed").addEventListener("change", (e) => {
+    missPlayer.speed = Number(e.target.value) || 0.5;
+  });
+  $("#missScrub").addEventListener("input", (e) => {
+    if (!missPlayer.miss) return;
+    // Pause during manual scrub so playback doesn't fight the user's drag.
+    if (missPlayer.playing) togglePlay();
+    missPlayer.currentT = Number(e.target.value);
+    renderMissPlayback();
+  });
 }
 
 function formatMs(ms) {

@@ -159,10 +159,24 @@
               <ol id="missList" class="miss-list"></ol>
             </div>
             <div class="miss-playfield-wrap">
-              <h3>Playfield <span id="missSelectedLabel" class="pill">nothing selected</span></h3>
+              <h3>Playback <span id="missSelectedLabel" class="pill">nothing selected</span></h3>
               <svg id="missPlayfield" class="miss-playfield" viewBox="0 0 512 384" preserveAspectRatio="xMidYMid meet"></svg>
+              <div class="miss-player">
+                <div class="miss-player-controls">
+                  <button id="missPlayBtn" class="btn small" type="button">▶ Play</button>
+                  <button id="missRestartBtn" class="btn small" type="button">↺ Restart</button>
+                  <select id="missSpeed" class="miss-speed">
+                    <option value="1">1×</option>
+                    <option value="0.5" selected>0.5×</option>
+                    <option value="0.25">0.25×</option>
+                    <option value="0.1">0.1×</option>
+                  </select>
+                  <span id="missPlayTime" class="miss-play-time">--</span>
+                </div>
+                <input id="missScrub" class="miss-scrub" type="range" min="0" max="1000" step="1" value="0" />
+              </div>
               <p class="hint">
-                Pink outlined <b>MISS</b> = the missed object (dashed ring = judgment radius). Grey circles = already-passed objects, lighter circles = upcoming. Number = order relative to the miss (−1 = previous, +1 = next). Slider bodies rendered where available. Cyan polyline = cursor path across ±1500ms window (dim before the miss, bright after); cyan dot = cursor's closest approach with a dashed line to the object center.
+                Scrub the timeline to move through the ±few seconds around the miss, or hit Play to watch it back in real time (0.5× default). Approach circles shrink onto their objects the same way they do in the game. Cursor trail = last ~300ms of movement; brightest at the current playhead. Missed object flashes red once its judgment window closes without a hit.
               </p>
             </div>
           </div>

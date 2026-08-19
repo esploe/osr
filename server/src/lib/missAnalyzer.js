@@ -42,10 +42,12 @@ function preemptMs(ar) {
 }
 
 // How long around the miss to include context in the response so the UI
-// can render nearby objects + cursor path. Trailing side is short --
-// gameplay past the miss is usually not what the reader wants.
-const CONTEXT_BEFORE_MS = 1500;
-const CONTEXT_AFTER_MS = 500;
+// can render nearby objects + cursor path + play back the moment. Wider
+// than a still-image needs (~1.5s) because the UI now supports a
+// scrub/play interaction where the reader wants a real "few seconds
+// before and after" window to explore.
+const CONTEXT_BEFORE_MS = 3000;
+const CONTEXT_AFTER_MS = 1500;
 
 function applyMods(diff, mods) {
   let { OD, CS, AR } = diff;
