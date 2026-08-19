@@ -692,19 +692,73 @@ function selectMiss(misses, index, stats) {
 
   const svg = $("#missPlayfield");
   const r = stats.circleRadiusOsuPx;
-  const cursor = m.cursor;
-  const cursorMarkers = cursor
-    ? `
-      <line x1="${m.objectX}" y1="${m.objectY}" x2="${cursor.x}" y2="${cursor.y}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4 3" />
-      <circle cx="${cursor.x}" cy="${cursor.y}" r="6" fill="#66d9ff" stroke="#0e0c14" stroke-width="1.5" />
-    `
-    : "";
-  svg.innerHTML = `
-    <rect x="0" y="0" width="512" height="384" fill="#0e0c14" stroke="var(--border)" />
-    <circle cx="${m.objectX}" cy="${m.objectY}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 4" />
-    <circle cx="${m.objectX}" cy="${m.objectY}" r="8" fill="var(--accent)" stroke="#0e0c14" stroke-width="1.5" />
-    ${cursorMarkers}
-  `;
+  const ctx = m.context || { objects: [], cursor: [] };
+
+  // Sort context objects so past objects render first (below) and the
+  // missed one renders last (on top). Also lets us pick a per-object
+  // style from its time relative to the miss.
+  const objectsSorted = ctx.objects.slice().sort((a, b) => a.t - b.t);
+  const missT = m.objectTime;
+
+  // Cursor polyline for the whole context window. Highlight the segment
+  // right around the miss's own hit time so the reader's eye lands there.
+  const cursorPts = ctx.cursor;
+  const preMiss = [], postMiss = [];
+  for (const [t, x, y] of cursorPts) (t <= missT ? preMiss : postMiss).push([x, y]);
+  const pathD = (pts) => pts.length ? "M " + pts.map(([x, y]) => `${x} ${y}`).join(" L ") : "";
+
+  // Small tick marks on the cursor path every ~150ms so timing is legible.
+  const tickMarks = [];
+  let lastTickT = -Infinity;
+  for (const [t, x, y] of cursorPts) {
+    if (t - lastTickT >= 150) {
+      tickMarks.push(`<circle cx="${x}" cy="${y}" r="1.5" fill="var(--text-dim)" opacity="0.55" />`);
+      lastTickT = t;
+    }
+  }
+
+  const parts = [];
+  parts.push(`<rect x="0" y="0" width="512" height="384" fill="#0e0c14" />`);
+
+  // Nearby hit objects: fade older-first, tint approaching ones by accent color.
+  for (const o of objectsSorted) {
+    const isMissed = o.i === m.objectIndex;
+    const dt = o.t - missT; // negative = already past
+    // Opacity: peaks near the miss time, fades either side of the ±1500ms window.
+    const fadeIn = dt < 0 ? Math.max(0, 1 + dt / 1500) : Math.max(0, 1 - dt / 1500);
+    const opacity = isMissed ? 1 : 0.25 + 0.55 * fadeIn;
+    const stroke = isMissed ? "var(--accent)" : dt < 0 ? "#5a5273" : "#8f86ad";
+    const fill = isMissed ? "rgba(255,102,171,0.15)" : "rgba(255,255,255,0.03)";
+
+    if (o.k === "s" && o.cp && o.cp.length >= 2) {
+      const body = "M " + o.cp.map(([x, y]) => `${x} ${y}`).join(" L ");
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="${r * 1.8}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity * 0.35}" />`);
+      parts.push(`<path d="${body}" fill="none" stroke="${stroke}" stroke-width="1.5" opacity="${opacity}" />`);
+      const end = o.cp[o.cp.length - 1];
+      parts.push(`<circle cx="${end[0]}" cy="${end[1]}" r="${r * 0.5}" fill="none" stroke="${stroke}" stroke-width="1.5" opacity="${opacity}" />`);
+    }
+
+    parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2" opacity="${opacity}" />`);
+    // Small number in the middle showing order relative to the miss (0 for the miss itself).
+    const label = isMissed ? "MISS" : String(o.i - m.objectIndex);
+    parts.push(`<text x="${o.x}" y="${o.y + 3}" text-anchor="middle" font-size="9" font-family="Consolas, monospace" fill="${stroke}" opacity="${opacity}">${label}</text>`);
+  }
+
+  // Missed-object judgment radius (dashed, sits over top).
+  parts.push(`<circle cx="${m.objectX}" cy="${m.objectY}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.85" />`);
+
+  // Cursor path -- pre-miss dimmer, post-miss brighter.
+  parts.push(...tickMarks);
+  if (preMiss.length) parts.push(`<path d="${pathD(preMiss)}" fill="none" stroke="#66d9ff" stroke-width="1.5" opacity="0.5" />`);
+  if (postMiss.length) parts.push(`<path d="${pathD(postMiss)}" fill="none" stroke="#66d9ff" stroke-width="1.8" opacity="0.95" />`);
+
+  // Cursor's closest-approach marker.
+  if (m.cursor) {
+    parts.push(`<line x1="${m.objectX}" y1="${m.objectY}" x2="${m.cursor.x}" y2="${m.cursor.y}" stroke="#66d9ff" stroke-width="1" stroke-dasharray="3 2" opacity="0.8" />`);
+    parts.push(`<circle cx="${m.cursor.x}" cy="${m.cursor.y}" r="4.5" fill="#66d9ff" stroke="#0e0c14" stroke-width="1.5" />`);
+  }
+
+  svg.innerHTML = parts.join("");
 }
 
 function formatMs(ms) {

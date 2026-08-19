@@ -67,6 +67,7 @@ export function parseBeatmap(text) {
       // p[5] = curveType|point|point|... , p[6] = repeats, p[7] = pixelLength
       const repeats = Number(p[6] ?? 1);
       const pixelLength = Number(p[7] ?? 0);
+      const curve = parseSliderCurve(p[5] || "", { headX: x, headY: y });
       const endTime = computeSliderEndTime({
         startTime: time,
         pixelLength,
@@ -74,7 +75,7 @@ export function parseBeatmap(text) {
         sliderMultiplier,
         timingPoints,
       });
-      return { ...base, kind: "slider", repeats, pixelLength, endTime };
+      return { ...base, kind: "slider", repeats, pixelLength, endTime, curve };
     }
     return { ...base, kind: "circle" };
   });
@@ -95,6 +96,100 @@ export function parseBeatmap(text) {
     timingPoints,
     hitObjects,
   };
+}
+
+// Parse the slider curve spec ("B|x:y|x:y|...", "L|...", "P|...", "C|...")
+// into a sampled polyline in playfield coordinates. We don't need pixel-
+// perfect path lengths (osu! itself only uses the curve for visuals and
+// slider-tick spacing, which the miss analyzer doesn't judge) -- a
+// coarse polyline is enough to draw a recognizable body shape.
+function parseSliderCurve(spec, { headX, headY }) {
+  const parts = spec.split("|");
+  if (parts.length < 2) return { kind: "linear", points: [{ x: headX, y: headY }] };
+  const kind = parts[0]; // B=bezier, L=linear, P=perfect-circle, C=catmull
+  const controls = [{ x: headX, y: headY }];
+  for (let i = 1; i < parts.length; i++) {
+    const [cx, cy] = parts[i].split(":").map(Number);
+    if (Number.isFinite(cx) && Number.isFinite(cy)) controls.push({ x: cx, y: cy });
+  }
+  if (controls.length < 2) return { kind: "linear", points: controls };
+  if (kind === "L") return { kind: "linear", points: controls };
+  if (kind === "P" && controls.length === 3) return { kind: "perfect", points: samplePerfectCircle(controls, 32) };
+  // Bezier and Catmull: split at repeated control points into sub-segments,
+  // then sample each with a small number of steps and concatenate. Curve
+  // types we don't specially handle (Catmull is rare) fall through to a
+  // straight polyline, which is a reasonable "we can't render this
+  // accurately, at least give a general direction" fallback.
+  const segments = splitAtDuplicates(controls);
+  const pts = [{ x: controls[0].x, y: controls[0].y }];
+  for (const seg of segments) {
+    for (let step = 1; step <= 20; step++) {
+      const t = step / 20;
+      const p = kind === "B" ? bezierEval(seg, t) : linearEval(seg, t);
+      pts.push(p);
+    }
+  }
+  return { kind: kind === "B" ? "bezier" : "linear", points: pts };
+}
+
+function splitAtDuplicates(pts) {
+  const out = [];
+  let start = 0;
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].x === pts[i - 1].x && pts[i].y === pts[i - 1].y) {
+      out.push(pts.slice(start, i));
+      start = i;
+    }
+  }
+  out.push(pts.slice(start));
+  return out.filter((s) => s.length >= 2);
+}
+
+function bezierEval(controls, t) {
+  const pts = controls.map((p) => ({ x: p.x, y: p.y }));
+  for (let i = pts.length - 1; i > 0; i--) {
+    for (let j = 0; j < i; j++) {
+      pts[j].x = pts[j].x * (1 - t) + pts[j + 1].x * t;
+      pts[j].y = pts[j].y * (1 - t) + pts[j + 1].y * t;
+    }
+  }
+  return pts[0];
+}
+
+function linearEval(controls, t) {
+  const a = controls[0];
+  const b = controls[controls.length - 1];
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+// Perfect-circle sliders use exactly 3 control points; the arc is the
+// unique circle through those three. If they're collinear, degrade
+// gracefully to a straight line so we still draw *something*.
+function samplePerfectCircle([p1, p2, p3], steps) {
+  const ax = p2.x - p1.x, ay = p2.y - p1.y;
+  const bx = p3.x - p1.x, by = p3.y - p1.y;
+  const d = 2 * (ax * by - ay * bx);
+  if (Math.abs(d) < 1e-6) return [p1, p3];
+  const a2 = ax * ax + ay * ay;
+  const b2 = bx * bx + by * by;
+  const cx = p1.x + (by * a2 - ay * b2) / d;
+  const cy = p1.y + (ax * b2 - bx * a2) / d;
+  const r = Math.hypot(p1.x - cx, p1.y - cy);
+  const a1 = Math.atan2(p1.y - cy, p1.x - cx);
+  const a3 = Math.atan2(p3.y - cy, p3.x - cx);
+  // Direction (CW vs CCW) is decided by whether p2 sits on the short arc.
+  const midAngle = Math.atan2(p2.y - cy, p2.x - cx);
+  let start = a1, end = a3;
+  const short = ((end - start) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+  const relMid = ((midAngle - start) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+  if (relMid > short) end = start + short - 2 * Math.PI;
+  else end = start + short;
+  const out = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = start + (end - start) * (i / steps);
+    out.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  return out;
 }
 
 // Slider duration in ms = pixelLength / (100 * sliderMultiplier * SV) * beatLength * repeats,

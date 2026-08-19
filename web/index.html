@@ -161,7 +161,9 @@
             <div class="miss-playfield-wrap">
               <h3>Playfield <span id="missSelectedLabel" class="pill">nothing selected</span></h3>
               <svg id="missPlayfield" class="miss-playfield" viewBox="0 0 512 384" preserveAspectRatio="xMidYMid meet"></svg>
-              <p class="hint">Pink = missed object · cyan = cursor at closest approach · dashed ring = judgment radius.</p>
+              <p class="hint">
+                Pink outlined <b>MISS</b> = the missed object (dashed ring = judgment radius). Grey circles = already-passed objects, lighter circles = upcoming. Number = order relative to the miss (−1 = previous, +1 = next). Slider bodies rendered where available. Cyan polyline = cursor path across ±1500ms window (dim before the miss, bright after); cyan dot = cursor's closest approach with a dashed line to the object center.
+              </p>
             </div>
           </div>
         </div>
