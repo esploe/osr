@@ -451,7 +451,7 @@ input[type="checkbox"] {
 .miss-item-detail { color: var(--text-dim); font-size: 11px; }
 .miss-playfield {
   width: 100%;
-  aspect-ratio: 512 / 384;
+  aspect-ratio: 4 / 3;
   background: #0e0c14;
   border-radius: 8px;
   border: 1px solid var(--border);

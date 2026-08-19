@@ -781,7 +781,13 @@ function renderMissPlayback() {
   const trail = cursorTrail(cursor, currentT, 300);
 
   const parts = [];
-  parts.push(`<rect x="0" y="0" width="512" height="384" fill="#0e0c14" />`);
+  // Background covers the whole padded viewBox so the padded area isn't
+  // visibly a different color from the playfield proper.
+  parts.push(`<rect x="-128" y="-96" width="768" height="576" fill="#0e0c14" />`);
+  // Subtle guide showing the actual 512x384 osu! playfield boundary --
+  // objects sitting just outside (edge of the map's playable area) are
+  // legitimate and shouldn't look "clipped" against a hard black frame.
+  parts.push(`<rect x="0" y="0" width="512" height="384" fill="none" stroke="var(--border)" stroke-width="1" opacity="0.55" />`);
 
   for (const o of objects) {
     // Is this object visible right now?
