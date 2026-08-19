@@ -39,3 +39,17 @@ export async function getProfileSettings(name) {
   }
   return res.json();
 }
+
+// Same shape the web UI's skin dropdown consumes:
+//   [{ id: "bundled:default", name: "danser default", bundled: true },
+//    { id: "custom:MySkin",   name: "MySkin (uploaded)", bundled: false }, ...]
+// The `id` is what goes into a render's settings.skinName -- the
+// coordinator's danserSettings.js#skinFolderName() translates it back to
+// the actual skin folder at render time.
+export async function listSkins() {
+  const res = await fetch(`${COORDINATOR_URL}/api/skins`);
+  if (!res.ok) {
+    throw new Error(`Failed to list skins (HTTP ${res.status}).`);
+  }
+  return res.json();
+}

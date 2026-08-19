@@ -143,6 +143,14 @@ stable per-score URL, only a beatmap link + player name) -- see
 `bot/src/scoreParser.js` for exactly what it looks for, and the
 `SCORE_BOT_IDS` env var if it misidentifies which bot messages to react to.
 
+Per-user render preferences are set through slash commands:
+- `/link <username>` -- link your Discord to an osu! username (needed for
+  the "@mention with no reply" trigger).
+- `/settings skin <skin>` -- pick which skin (bundled or uploaded via the
+  web UI) is used for your renders; overrides `BOT_RENDER_PROFILE` for you
+  specifically. Type to autocomplete against skins available on the server.
+- `/settings show` / `/settings clear` -- inspect / reset your preferences.
+
 Setup:
 
 1. Create a Discord application at

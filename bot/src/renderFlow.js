@@ -1,4 +1,5 @@
 import { getProfileSettings, submitRender, getJob } from "./renderClient.js";
+import { getUserPrefs } from "./prefsStore.js";
 
 const POLL_INTERVAL_MS = Number(process.env.BOT_POLL_INTERVAL_MS || 4000);
 const MAX_POLL_MS = 30 * 60 * 1000; // give up rather than poll forever if a job gets stuck
@@ -9,6 +10,12 @@ const activeUsers = new Set();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildRenderSettings(profileSettings, prefs) {
+  const merged = { ...(profileSettings || {}) };
+  if (prefs.skin) merged.skinName = prefs.skin;
+  return Object.keys(merged).length ? merged : null;
 }
 
 export async function runRenderFlow(triggerMessage, scoreUrl) {
@@ -23,7 +30,13 @@ export async function runRenderFlow(triggerMessage, scoreUrl) {
   try {
     statusMessage = await triggerMessage.reply(`🎬 Queued: ${scoreUrl}`);
 
-    const settings = await getProfileSettings(process.env.BOT_RENDER_PROFILE);
+    // Precedence for settings sent to the coordinator, lowest to highest:
+    // schema defaults (filled in by the coordinator's validateAndMerge if
+    // we send null) < BOT_RENDER_PROFILE (shared bot default) < the user's
+    // own /settings prefs. The user's skin choice overrides both.
+    const profileSettings = await getProfileSettings(process.env.BOT_RENDER_PROFILE);
+    const prefs = getUserPrefs(userId);
+    const settings = buildRenderSettings(profileSettings, prefs);
     const jobId = await submitRender(scoreUrl, settings);
 
     let lastStage = null;
