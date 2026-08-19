@@ -8,8 +8,36 @@ import { findBeatmapFileByHash } from "../lib/beatmapFinder.js";
 import { resolveBeatmapByHash, ensureBeatmapsetDownloaded } from "../lib/beatmapMirror.js";
 import { parseScoreUrl, downloadReplayForScore } from "../lib/osuApi.js";
 import { dirs } from "../lib/paths.js";
+import { Beatmap, Performance } from "rosu-pp-js";
 
 export const missAnalyzerRouter = Router();
+
+// pp for the actual play and for a hypothetical no-miss version (every
+// miss recovered as a 300, full combo), computed with rosu-pp (the same
+// algorithm osu! uses) off the cached .osu file. Best-effort -- a
+// calculation failure returns null rather than breaking the analysis.
+function computePp(content, replay) {
+  try {
+    const map = new Beatmap(content);
+    const c = replay.counts;
+    const mods = replay.mods; // osr bitfield, understood by rosu directly
+    const current = new Performance({
+      mods, n300: c.count300, n100: c.count100, n50: c.count50,
+      misses: c.countMiss, combo: replay.maxCombo,
+    }).calculate(map);
+    const fc = new Performance({
+      mods, n300: c.count300 + c.countMiss, n100: c.count100, n50: c.count50, misses: 0,
+    }).calculate(map);
+    return {
+      current: Math.round(current.pp * 10) / 10,
+      fc: Math.round(fc.pp * 10) / 10,
+      stars: Math.round(current.difficulty.stars * 100) / 100,
+    };
+  } catch (err) {
+    console.error("pp calc failed:", err.message);
+    return null;
+  }
+}
 
 // Core: given raw .osr bytes, parse + resolve + analyze and either send
 // the full result JSON or an error JSON/text. Returns nothing (writes to
@@ -61,6 +89,7 @@ async function analyzeReplayBytes(bytes, res) {
     misses,
     stats,
     warning,
+    pp: computePp(match.content, replay),
   });
 }
 

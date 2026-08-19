@@ -787,34 +787,40 @@ function computeAccGrade(n300, n100, n50, n0) {
 }
 
 // "What if you hadn't missed" -- turns every header miss into a 300 and
-// shows the accuracy/grade the otherwise-identical play would have hit.
-function renderSimulation(header, detectedMisses) {
+// shows the accuracy/grade/pp the otherwise-identical play would have hit.
+function renderSimulation(header, detectedMisses, pp) {
   const c = header.counts;
   const cur = computeAccGrade(c.count300, c.count100, c.count50, c.countMiss);
   const sim = computeAccGrade(c.count300 + c.countMiss, c.count100, c.count50, 0);
   const accDelta = sim.acc - cur.acc;
 
-  const col = (label, g, accStr, sub) => `
+  const col = (label, g, accStr, ppVal, sub) => `
     <div class="sim-col">
       <div class="sim-col-label">${label}</div>
       <div class="sim-grade grade-${g.grade}">${g.grade}</div>
       <div class="sim-acc">${accStr}</div>
+      ${ppVal != null ? `<div class="sim-pp">${ppVal.toFixed(0)}<span>pp</span></div>` : ""}
       <div class="sim-sub">${sub}</div>
     </div>`;
 
+  const ppDelta = pp && pp.current != null && pp.fc != null ? pp.fc - pp.current : null;
+  const starsChip = pp && pp.stars != null ? `<span class="sim-stars">★ ${pp.stars.toFixed(2)}</span>` : "";
+
   $("#missSimBody").innerHTML =
     `<div class="sim-cols">` +
-      col("This play", cur, `${cur.acc.toFixed(2)}%`, `${header.maxCombo}× combo`) +
+      col("This play", cur, `${cur.acc.toFixed(2)}%`, pp?.current, `${header.maxCombo}× combo`) +
       `<div class="sim-arrow">→</div>` +
-      col("No misses", sim, `${sim.acc.toFixed(2)}%`, accDelta >= 0.005 ? `+${accDelta.toFixed(2)}% acc` : "same") +
+      col("No misses", sim, `${sim.acc.toFixed(2)}%`, pp?.fc,
+        [accDelta >= 0.005 ? `+${accDelta.toFixed(2)}%` : "same acc", ppDelta != null && ppDelta >= 0.5 ? `+${ppDelta.toFixed(0)}pp` : ""].filter(Boolean).join(" · ")) +
     `</div>` +
     `<div class="sim-breakdown">` +
       `<span class="j j300">${c.count300}</span>` +
       `<span class="j j100">${c.count100}</span>` +
       `<span class="j j50">${c.count50}</span>` +
       `<span class="j jmiss">${c.countMiss} miss</span>` +
+      starsChip +
     `</div>` +
-    `<p class="hint">Recovers all <b>${c.countMiss}</b> of the header's misses as 300s — an upper bound on the accuracy this play could have reached. That count includes slider-end and spinner misses, so it can exceed the <b>${detectedMisses}</b> the playfield analyzer marks.</p>`;
+    `<p class="hint">Recovers all <b>${c.countMiss}</b> of the header's misses as 300s — an upper bound on the accuracy${pp ? " and pp" : ""} this play could have reached. That count includes slider-end and spinner misses, so it can exceed the <b>${detectedMisses}</b> the playfield analyzer marks.${pp ? "" : " (pp calc unavailable for this map.)"}</p>`;
 
   $("#missSimPanel").classList.remove("hidden");
 }
@@ -826,7 +832,7 @@ function renderMissResults(data) {
     `mods ${escapeHtml(header.modsString)} &middot; combo ${header.maxCombo}${header.perfectCombo ? " (FC)" : ""} &middot; ` +
     `header reports <b>${header.counts.countMiss}</b> miss${header.counts.countMiss === 1 ? "" : "es"}`;
 
-  renderSimulation(header, misses.length);
+  renderSimulation(header, misses.length, data.pp);
 
   const detected = misses.length;
   const reported = header.counts.countMiss;
