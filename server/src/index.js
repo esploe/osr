@@ -16,6 +16,7 @@ import { configRouter } from "./routes/config.js";
 import { replayRouter } from "./routes/replay.js";
 import { internalRouter } from "./routes/internal.js";
 import { profilesRouter } from "./routes/profiles.js";
+import { missAnalyzerRouter } from "./routes/missAnalyzer.js";
 import { ensureBaseSettings } from "./lib/danser.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,7 @@ app.use("/api/config", configRouter);
 app.use("/api/replay", replayRouter);
 app.use("/api/internal", internalRouter);
 app.use("/api/profiles", profilesRouter);
+app.use("/api/miss-analyzer", missAnalyzerRouter);
 
 app.use(express.static(webDir));
 

@@ -1,9 +1,11 @@
 // Parser for the osu! replay (.osr) binary header.
 // Format reference: osu! wiki "Client File Formats" -> osr (file format).
-// We only need the header metadata (mode, beatmap hash, mods, player, score
-// stats) to look up the matching beatmap and label the job -- danser-go
-// reads and decodes the full file (including the LZMA-compressed input
-// stream) itself, so we deliberately stop before that section.
+// The header parser is enough for the render pipeline (it only needs mode,
+// beatmap hash, mods, player). The frame parser (parseReplayFull) is used
+// by the miss analyzer and walks the LZMA-compressed input stream that
+// follows the header.
+
+import lzma from "lzma";
 
 const MODES = ["osu", "taiko", "fruits", "mania"];
 
@@ -138,4 +140,72 @@ export function parseReplayHeader(buffer) {
     timestampTicks: timestampTicks.toString(),
     headerByteLength: r.pos,
   };
+}
+
+// Full parse: header + decompressed input frames. The compressed data
+// starts right after the header at `int32 length` + that many bytes of
+// LZMA1-alone stream. Each decoded frame is `w|x|y|z` (pipe-separated,
+// comma-separated frames):
+//   w = int64  ms elapsed since previous frame (or seed for the final
+//                frame -- w = -12345 marks it and z is an RNG seed used by
+//                the client, unrelated to gameplay; we drop it)
+//   x = float  cursor X in osu! pixels (0-512, playfield-local)
+//   y = float  cursor Y in osu! pixels (0-384)
+//   z = int32  bitfield of pressed keys/buttons (see KEY_* below)
+export const KEY_M1 = 1 << 0;
+export const KEY_M2 = 1 << 1;
+export const KEY_K1 = 1 << 2;
+export const KEY_K2 = 1 << 3;
+export const KEY_SMOKE = 1 << 4;
+// K1 always also toggles M1 in modern clients (same for K2/M2), so we OR
+// them together when checking for "was any hit-key just pressed?".
+export const HIT_KEYS_MASK = KEY_M1 | KEY_M2 | KEY_K1 | KEY_K2;
+
+export async function parseReplayFull(buffer) {
+  const header = parseReplayHeader(buffer);
+  let pos = header.headerByteLength;
+
+  // A rare byte between lifeBarGraph and the frames section in some old
+  // replays sets an int64 "online score id" -- modern clients place it
+  // after the input data, but a few legacy ones inserted it here. We
+  // detect the "modern" layout by checking that the next int32 is a
+  // plausible compressed-data length (positive, fits inside the buffer).
+  const declaredLen = buffer.readInt32LE(pos);
+  if (declaredLen < 0 || pos + 4 + declaredLen > buffer.length) {
+    throw new Error(`Compressed replay-data length looks wrong (${declaredLen}) -- old-format .osr with online-score-id in the header?`);
+  }
+  pos += 4;
+  const compressed = buffer.subarray(pos, pos + declaredLen);
+
+  const decoded = await new Promise((resolve, reject) => {
+    // lzma-js accepts a Buffer-ish (typed array); result is an Array of
+    // int8 values (signed bytes). Wrap it back into a Buffer for easy
+    // slicing/toString below.
+    lzma.decompress(compressed, (result, err) => {
+      if (err) return reject(err);
+      resolve(Buffer.from(result));
+    });
+  });
+
+  const text = decoded.toString("utf8");
+  const frames = [];
+  let tAbs = 0;
+  let seed = null;
+  for (const chunk of text.split(",")) {
+    if (!chunk) continue;
+    const parts = chunk.split("|");
+    if (parts.length !== 4) continue;
+    const w = Number(parts[0]);
+    const x = parseFloat(parts[1]);
+    const y = parseFloat(parts[2]);
+    const z = parseInt(parts[3], 10);
+    if (w === -12345) {
+      seed = z;
+      continue;
+    }
+    tAbs += w;
+    frames.push({ dt: w, t: tAbs, x, y, k: z });
+  }
+
+  return { ...header, frames, seed };
 }

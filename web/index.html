@@ -134,24 +134,36 @@
   <div class="main-tab-content hidden" data-main-tab-content="miss">
     <main class="miss-layout">
       <section class="panel miss-panel">
-        <h2>Miss analyzer <span class="pill">baseplate</span></h2>
+        <h2>Miss analyzer</h2>
         <p class="hint">
-          Drop a .osr replay here to inspect its header. Full miss-by-miss
-          analysis (timing, cursor position at each miss, matching beatmap
-          object, screenshot) is not implemented yet -- this tab exists as
-          the wiring skeleton for it.
+          Drop a .osr replay -- the coordinator parses the LZMA-compressed
+          cursor stream, downloads the matching beatmap (cached with the
+          render pipeline), and lists every hit object where no key-press
+          landed inside the circle within the OD-derived 50 window.
+          Sliders are judged as their head; spinners are skipped.
         </p>
         <div id="missDropzone" class="dropzone">
           <p>Drag &amp; drop a .osr file here, or click to browse</p>
           <input id="missReplayFile" type="file" accept=".osr" hidden />
         </div>
         <div id="missReplayInfo" class="replay-info hidden"></div>
-        <div id="missBaseplate" class="miss-baseplate hidden">
-          <h3>Miss list</h3>
-          <div id="missCount" class="miss-count"></div>
-          <ul id="missList" class="miss-list">
-            <li class="miss-list-empty">No per-object miss data yet -- the parser only reads the header, not the LZMA-compressed input frames. Wire that up here.</li>
-          </ul>
+        <div id="missStatus" class="hint"></div>
+        <div id="missResults" class="miss-results hidden">
+          <div class="miss-summary">
+            <div id="missSummaryText" class="miss-count"></div>
+            <div id="missSummaryStats" class="hint"></div>
+          </div>
+          <div class="miss-detail">
+            <div class="miss-list-wrap">
+              <h3>Missed objects</h3>
+              <ol id="missList" class="miss-list"></ol>
+            </div>
+            <div class="miss-playfield-wrap">
+              <h3>Playfield <span id="missSelectedLabel" class="pill">nothing selected</span></h3>
+              <svg id="missPlayfield" class="miss-playfield" viewBox="0 0 512 384" preserveAspectRatio="xMidYMid meet"></svg>
+              <p class="hint">Pink = missed object · cyan = cursor at closest approach · dashed ring = judgment radius.</p>
+            </div>
+          </div>
         </div>
       </section>
     </main>

@@ -601,28 +601,118 @@ function wireMissAnalyzer() {
 
 async function handleMissReplayFile(file) {
   const info = $("#missReplayInfo");
-  const baseplate = $("#missBaseplate");
+  const status = $("#missStatus");
+  const results = $("#missResults");
   info.classList.remove("hidden");
-  info.textContent = "Reading replay header...";
-  baseplate.classList.add("hidden");
+  info.textContent = "Uploading replay...";
+  status.textContent = "";
+  results.classList.add("hidden");
+
   try {
     const buf = await file.arrayBuffer();
-    const res = await fetch("/api/replay/inspect", {
+    status.textContent = "Parsing replay + resolving beatmap (this can take a few seconds on a cold cache)...";
+    const res = await fetch("/api/miss-analyzer/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
       body: buf,
     });
-    if (!res.ok) throw new Error(await res.text());
-    const meta = await res.json();
-    info.innerHTML =
-      `<b>${escapeHtml(meta.playerName)}</b> &middot; ${meta.mode} &middot; ${meta.modsString}<br>` +
-      `beatmap hash: ${meta.beatmapHash.slice(0, 12)}&hellip; &middot; ` +
-      `combo ${meta.maxCombo}${meta.perfectCombo ? " (FC)" : ""} &middot; score ${meta.totalScore.toLocaleString()}`;
-    $("#missCount").innerHTML = `Header reports <b>${meta.counts.countMiss}</b> miss${meta.counts.countMiss === 1 ? "" : "es"} on this replay.`;
-    baseplate.classList.remove("hidden");
+    const text = await res.text();
+    if (!res.ok) {
+      // Server sends JSON for known-shape errors (wrong mode etc), plain text otherwise.
+      try {
+        const j = JSON.parse(text);
+        throw new Error(j.error || text);
+      } catch (e) {
+        if (e.message && e.message !== text) throw e;
+        throw new Error(text);
+      }
+    }
+    const data = JSON.parse(text);
+    renderMissResults(data);
+    status.textContent = "";
   } catch (err) {
-    info.textContent = `Couldn't read replay: ${err.message}`;
+    info.textContent = `Couldn't analyze replay: ${err.message}`;
+    status.textContent = "";
   }
+}
+
+function renderMissResults(data) {
+  const { header, beatmap, misses, stats, warning } = data;
+  $("#missReplayInfo").innerHTML =
+    `<b>${escapeHtml(header.playerName)}</b> &middot; ${escapeHtml(beatmap.artist)} - ${escapeHtml(beatmap.title)} [${escapeHtml(beatmap.version)}]<br>` +
+    `mods ${escapeHtml(header.modsString)} &middot; combo ${header.maxCombo}${header.perfectCombo ? " (FC)" : ""} &middot; ` +
+    `header reports <b>${header.counts.countMiss}</b> miss${header.counts.countMiss === 1 ? "" : "es"}`;
+
+  const detected = misses.length;
+  const reported = header.counts.countMiss;
+  const summary = `Detected <b>${detected}</b> miss${detected === 1 ? "" : "es"} on hit-circles/slider-heads.`;
+  const delta = detected === reported ? "matches replay header." : `(header says ${reported} -- differences are usually slider-body drops or spinner losses that this analyzer intentionally skips.)`;
+  $("#missSummaryText").innerHTML = summary;
+  $("#missSummaryStats").innerHTML =
+    `${delta}<br>` +
+    `Effective OD ${stats.effectiveOD.toFixed(2)} (50-window &plusmn;${stats.hitWindow50Ms.toFixed(1)}ms), ` +
+    `effective CS ${stats.effectiveCS.toFixed(2)} (radius ${stats.circleRadiusOsuPx.toFixed(1)}px). ` +
+    `Judged ${stats.judgedObjects} objects, skipped ${stats.spinnersSkipped} spinner${stats.spinnersSkipped === 1 ? "" : "s"}.` +
+    (warning ? `<br><span style="color:var(--err)">${escapeHtml(warning)}</span>` : "");
+
+  const list = $("#missList");
+  if (!detected) {
+    list.innerHTML = `<li class="miss-list-empty">No missed hit-circles or slider-heads detected. Nice.</li>`;
+  } else {
+    list.innerHTML = misses.map((m, i) => {
+      const cursor = m.cursor
+        ? `cursor @ (${m.cursor.x.toFixed(0)}, ${m.cursor.y.toFixed(0)}), ${m.cursor.dist.toFixed(0)}px away at ${formatMs(m.cursor.t)}`
+        : `no cursor frame captured near this object`;
+      return `
+        <li class="miss-list-item" data-miss-index="${i}">
+          <div class="miss-item-top">
+            <span class="miss-item-time">${formatMs(m.objectTime)}</span>
+            <span class="miss-item-kind">${escapeHtml(m.kind)}</span>
+          </div>
+          <div class="miss-item-detail">obj #${m.objectIndex} @ (${m.objectX}, ${m.objectY}) &middot; ${cursor}</div>
+        </li>
+      `;
+    }).join("");
+    list.querySelectorAll(".miss-list-item").forEach((li) => {
+      li.addEventListener("click", () => selectMiss(misses, Number(li.dataset.missIndex), stats));
+    });
+    selectMiss(misses, 0, stats);
+  }
+
+  $("#missResults").classList.remove("hidden");
+}
+
+function selectMiss(misses, index, stats) {
+  document.querySelectorAll("#missList .miss-list-item").forEach((li, i) => {
+    li.classList.toggle("selected", i === index);
+  });
+  const m = misses[index];
+  if (!m) return;
+  $("#missSelectedLabel").textContent = `#${m.objectIndex} @ ${formatMs(m.objectTime)}`;
+
+  const svg = $("#missPlayfield");
+  const r = stats.circleRadiusOsuPx;
+  const cursor = m.cursor;
+  const cursorMarkers = cursor
+    ? `
+      <line x1="${m.objectX}" y1="${m.objectY}" x2="${cursor.x}" y2="${cursor.y}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4 3" />
+      <circle cx="${cursor.x}" cy="${cursor.y}" r="6" fill="#66d9ff" stroke="#0e0c14" stroke-width="1.5" />
+    `
+    : "";
+  svg.innerHTML = `
+    <rect x="0" y="0" width="512" height="384" fill="#0e0c14" stroke="var(--border)" />
+    <circle cx="${m.objectX}" cy="${m.objectY}" r="${r}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 4" />
+    <circle cx="${m.objectX}" cy="${m.objectY}" r="8" fill="var(--accent)" stroke="#0e0c14" stroke-width="1.5" />
+    ${cursorMarkers}
+  `;
+}
+
+function formatMs(ms) {
+  const total = Math.round(ms);
+  const mm = Math.floor(total / 60000);
+  const ss = Math.floor((total % 60000) / 1000).toString().padStart(2, "0");
+  const rest = (total % 1000).toString().padStart(3, "0");
+  return `${mm}:${ss}.${rest}`;
 }
 
 init();
