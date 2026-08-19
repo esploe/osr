@@ -63,6 +63,27 @@ function applyMods(diff, mods) {
   return { OD, CS, AR };
 }
 
+// osu! playfield height, used for the HardRock vertical flip.
+const PLAYFIELD_HEIGHT = 384;
+
+// HardRock flips the map vertically (y -> 384 - y; x is unchanged). The
+// replay's recorded cursor is already in the flipped space (it's what the
+// player actually saw and aimed at), so to make objects line up with the
+// cursor we must flip the beatmap's object coordinates the same way.
+// Everything else the analyzer reads from an object (time, radius, curve
+// shape) is orientation-independent apart from the y coordinates, which we
+// mirror here -- head, and every sampled slider-curve point.
+function flipObjectsForMods(hitObjects, mods) {
+  if (!(mods & MOD_HR)) return hitObjects;
+  return hitObjects.map((o) => {
+    const flipped = { ...o, y: PLAYFIELD_HEIGHT - o.y };
+    if (o.curve?.points) {
+      flipped.curve = { ...o.curve, points: o.curve.points.map((p) => ({ x: p.x, y: PLAYFIELD_HEIGHT - p.y })) };
+    }
+    return flipped;
+  });
+}
+
 export function analyzeMisses({ frames, beatmap, mods = 0 }) {
   if (beatmap.mode !== 0) {
     return { misses: [], warning: `Miss analyzer only supports osu!standard (mode 0); this map is mode ${beatmap.mode}.` };
@@ -72,6 +93,11 @@ export function analyzeMisses({ frames, beatmap, mods = 0 }) {
   const radius = circleRadius(CS);
   const preempt = preemptMs(AR);
 
+  // Apply HardRock's vertical flip to object coordinates up front so both
+  // hit detection and the context/rendering payload use flipped positions
+  // that match the replay's (already-flipped) cursor stream.
+  const hitObjects = flipObjectsForMods(beatmap.hitObjects, mods);
+
   const misses = [];
   let frameIdx = 0; // walking pointer -- frames are time-sorted, so we only ever move forward
   let prevKeys = 0;
@@ -79,7 +105,7 @@ export function analyzeMisses({ frames, beatmap, mods = 0 }) {
   // Objects are time-sorted in the .osu file (osu enforces this). We walk
   // both cursors together: for each object, look at every frame whose
   // time is inside the object's judgment window.
-  for (const obj of beatmap.hitObjects) {
+  for (const obj of hitObjects) {
     if (obj.kind === "spinner") continue;
 
     const windowStart = obj.time - hw50;
@@ -140,7 +166,7 @@ export function analyzeMisses({ frames, beatmap, mods = 0 }) {
         cursor: closest,
         taps,
         diagnosis: diagnoseMiss({ obj, taps, hw50, radius, closest }),
-        context: buildContext({ obj, beatmap, frames }),
+        context: buildContext({ obj, hitObjects, frames }),
       });
     }
   }
@@ -165,12 +191,12 @@ export function analyzeMisses({ frames, beatmap, mods = 0 }) {
 // draw a "moment in time" view: hit objects that were visible on
 // screen near the miss (fading-in approach circles + already-past
 // objects), and the cursor's path across the same window.
-function buildContext({ obj, beatmap, frames }) {
+function buildContext({ obj, hitObjects, frames }) {
   const tMin = obj.time - CONTEXT_BEFORE_MS;
   const tMax = obj.time + CONTEXT_AFTER_MS;
 
   const objects = [];
-  for (const other of beatmap.hitObjects) {
+  for (const other of hitObjects) {
     // A slider is visible if its head is in-range OR if its body is
     // still on screen at any point in the window.
     const endT = other.kind === "slider" ? other.endTime : other.time;
