@@ -10,6 +10,8 @@ export class Job extends EventEmitter {
     this.status = "queued"; // queued | running | done | error
     this.progress = 0; // 0-100, best-effort
     this.stage = "queued"; // human label for current pipeline stage
+    this.eta = null; // danser's reported time-remaining string (e.g. "21s"), null when unknown
+    this.speed = null; // danser's reported render speed multiplier (e.g. 1.91), null when unknown
     this.logs = [];
     this.error = null;
     this.outputPath = null;
@@ -22,10 +24,12 @@ export class Job extends EventEmitter {
     if (this.logs.length > 5000) this.logs.shift();
     this.emit("log", entry);
   }
-  setStage(stage, progress) {
+  setStage(stage, progress, extra = {}) {
     this.stage = stage;
     if (progress !== undefined) this.progress = progress;
-    this.emit("stage", { stage, progress: this.progress });
+    if (extra.eta !== undefined) this.eta = extra.eta;
+    if (extra.speed !== undefined) this.speed = extra.speed;
+    this.emit("stage", { stage, progress: this.progress, eta: this.eta, speed: this.speed });
   }
   setProgress(p) {
     this.progress = p;
@@ -45,6 +49,8 @@ export class Job extends EventEmitter {
       status: this.status,
       stage: this.stage,
       progress: this.progress,
+      eta: this.eta,
+      speed: this.speed,
       error: this.error,
       createdAt: this.createdAt,
       outputPath: this.outputPath ? true : false,
@@ -74,6 +80,10 @@ export class JobQueue {
 
   get(id) {
     return this.jobs.get(id);
+  }
+
+  list() {
+    return [...this.jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
   }
 
   queuePosition(id) {

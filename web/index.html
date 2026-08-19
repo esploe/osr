@@ -13,78 +13,149 @@
     <div id="versionBadge" class="version-badge" title="Build version"></div>
   </header>
 
-  <main class="layout">
-    <section class="panel input-panel">
-      <h2>1. Replay</h2>
-      <div class="input-tabs">
-        <button class="tab-btn active" data-tab="upload">Upload .osr</button>
-        <button class="tab-btn" data-tab="url">Score URL</button>
-      </div>
+  <nav class="main-tabs">
+    <button class="main-tab-btn active" data-main-tab="render">Render</button>
+    <button class="main-tab-btn" data-main-tab="jobs">Jobs</button>
+    <button class="main-tab-btn" data-main-tab="miss">Miss Analyzer</button>
+  </nav>
 
-      <div class="tab-content" data-tab-content="upload">
-        <div id="dropzone" class="dropzone">
-          <p>Drag &amp; drop a .osr file here, or click to browse</p>
-          <input id="replayFile" type="file" accept=".osr" hidden />
+  <div class="main-tab-content" data-main-tab-content="render">
+    <main class="layout">
+      <section class="panel input-panel">
+        <h2>1. Replay</h2>
+        <div class="input-tabs">
+          <button class="tab-btn active" data-tab="upload">Upload .osr</button>
+          <button class="tab-btn" data-tab="url">Score URL</button>
         </div>
-        <div id="replayInfo" class="replay-info hidden"></div>
-      </div>
 
-      <div class="tab-content hidden" data-tab-content="url">
+        <div class="tab-content" data-tab-content="upload">
+          <div id="dropzone" class="dropzone">
+            <p>Drag &amp; drop a .osr file here, or click to browse</p>
+            <input id="replayFile" type="file" accept=".osr" hidden />
+          </div>
+          <div id="replayInfo" class="replay-info hidden"></div>
+        </div>
+
+        <div class="tab-content hidden" data-tab-content="url">
+          <label class="field">
+            <span>osu! score URL</span>
+            <input id="scoreUrl" type="text" placeholder="https://osu.ppy.sh/scores/12345678" />
+          </label>
+          <p class="hint" id="urlHint">Requires an osu! API OAuth client configured on the server. Not all scores have a downloadable replay.</p>
+        </div>
+
+        <h2>2. Skin</h2>
         <label class="field">
-          <span>osu! score URL</span>
-          <input id="scoreUrl" type="text" placeholder="https://osu.ppy.sh/scores/12345678" />
+          <span>Skin</span>
+          <select id="skinSelect"></select>
         </label>
-        <p class="hint" id="urlHint">Requires an osu! API OAuth client configured on the server. Not all scores have a downloadable replay.</p>
-      </div>
+        <div class="skin-upload">
+          <label class="btn small" for="skinFile">Upload .osk skin</label>
+          <input id="skinFile" type="file" accept=".osk" hidden />
+          <span id="skinUploadStatus" class="hint"></span>
+        </div>
 
-      <h2>2. Skin</h2>
-      <label class="field">
-        <span>Skin</span>
-        <select id="skinSelect"></select>
-      </label>
-      <div class="skin-upload">
-        <label class="btn small" for="skinFile">Upload .osk skin</label>
-        <input id="skinFile" type="file" accept=".osk" hidden />
-        <span id="skinUploadStatus" class="hint"></span>
-      </div>
+        <button id="renderBtn" class="btn primary big" disabled>Render video</button>
+      </section>
 
-      <button id="renderBtn" class="btn primary big" disabled>Render video</button>
-    </section>
+      <section class="panel settings-panel">
+        <h2>3. Options</h2>
+        <div class="profiles-bar">
+          <select id="profileSelect"><option value="">-- load a saved profile --</option></select>
+          <button id="loadProfileBtn" class="btn small" type="button">Load</button>
+          <button id="deleteProfileBtn" class="btn small danger" type="button">Delete</button>
+        </div>
+        <div class="profiles-bar">
+          <input id="profileNameInput" class="profile-name-input" type="text" placeholder="Profile name" />
+          <button id="saveProfileBtn" class="btn small" type="button">Save current as...</button>
+        </div>
+        <span id="profileStatus" class="hint"></span>
+        <div id="settingsGroups"></div>
+      </section>
 
-    <section class="panel settings-panel">
-      <h2>3. Options</h2>
-      <div class="profiles-bar">
-        <select id="profileSelect"><option value="">-- load a saved profile --</option></select>
-        <button id="loadProfileBtn" class="btn small" type="button">Load</button>
-        <button id="deleteProfileBtn" class="btn small danger" type="button">Delete</button>
-      </div>
-      <div class="profiles-bar">
-        <input id="profileNameInput" class="profile-name-input" type="text" placeholder="Profile name" />
-        <button id="saveProfileBtn" class="btn small" type="button">Save current as...</button>
-      </div>
-      <span id="profileStatus" class="hint"></span>
-      <div id="settingsGroups"></div>
-    </section>
-
-    <section class="panel status-panel">
-      <h2>4. Job</h2>
-      <div id="jobIdle" class="job-idle">No render started yet.</div>
-      <div id="jobActive" class="job-active hidden">
-        <div class="job-stage" id="jobStage">queued</div>
-        <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
-        <pre id="jobLog" class="job-log"></pre>
-        <div id="jobResult" class="job-result hidden">
-          <video id="resultVideo" controls></video>
-          <a id="downloadLink" class="btn primary" download>Download MP4</a>
-          <div id="shareRow" class="share-row hidden">
-            <input id="shareLink" class="share-link" type="text" readonly />
-            <button id="copyShareBtn" class="btn small" type="button">Copy</button>
-            <a id="openShareLink" class="btn small" target="_blank" rel="noopener">Open</a>
+      <section class="panel status-panel">
+        <h2>4. Job</h2>
+        <div id="jobIdle" class="job-idle">No render started yet.</div>
+        <div id="jobActive" class="job-active hidden">
+          <div class="job-status-row">
+            <div class="job-stage" id="jobStage">queued</div>
+            <div class="job-eta hidden" id="jobEta"></div>
+          </div>
+          <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+          <pre id="jobLog" class="job-log"></pre>
+          <div id="jobResult" class="job-result hidden">
+            <video id="resultVideo" controls></video>
+            <a id="downloadLink" class="btn primary" download>Download MP4</a>
+            <div id="shareRow" class="share-row hidden">
+              <input id="shareLink" class="share-link" type="text" readonly />
+              <button id="copyShareBtn" class="btn small" type="button">Copy</button>
+              <a id="openShareLink" class="btn small" target="_blank" rel="noopener">Open</a>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
+
+  <div class="main-tab-content hidden" data-main-tab-content="jobs">
+    <main class="jobs-layout">
+      <section class="panel jobs-list-panel">
+        <div class="jobs-list-header">
+          <h2>Render history</h2>
+          <button id="jobsRefreshBtn" class="btn small" type="button">Refresh</button>
+        </div>
+        <p class="hint" id="jobsListHint">Loading...</p>
+        <div id="jobsList" class="jobs-list"></div>
+      </section>
+
+      <section class="panel jobs-detail-panel">
+        <div id="jobsDetailEmpty" class="job-idle">Select a job on the left to view its log and result.</div>
+        <div id="jobsDetail" class="job-active hidden">
+          <div class="jobs-detail-title" id="jobsDetailTitle"></div>
+          <div class="job-status-row">
+            <div class="job-stage" id="jobsDetailStage">queued</div>
+            <div class="job-eta hidden" id="jobsDetailEta"></div>
+          </div>
+          <div class="progress-bar"><div id="jobsDetailProgressFill" class="progress-fill"></div></div>
+          <pre id="jobsDetailLog" class="job-log"></pre>
+          <div id="jobsDetailResult" class="job-result hidden">
+            <video id="jobsDetailVideo" controls></video>
+            <a id="jobsDetailDownload" class="btn primary" download>Download MP4</a>
+            <div id="jobsDetailShareRow" class="share-row hidden">
+              <input id="jobsDetailShareLink" class="share-link" type="text" readonly />
+              <a id="jobsDetailOpenShare" class="btn small" target="_blank" rel="noopener">Open</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="main-tab-content hidden" data-main-tab-content="miss">
+    <main class="miss-layout">
+      <section class="panel miss-panel">
+        <h2>Miss analyzer <span class="pill">baseplate</span></h2>
+        <p class="hint">
+          Drop a .osr replay here to inspect its header. Full miss-by-miss
+          analysis (timing, cursor position at each miss, matching beatmap
+          object, screenshot) is not implemented yet -- this tab exists as
+          the wiring skeleton for it.
+        </p>
+        <div id="missDropzone" class="dropzone">
+          <p>Drag &amp; drop a .osr file here, or click to browse</p>
+          <input id="missReplayFile" type="file" accept=".osr" hidden />
+        </div>
+        <div id="missReplayInfo" class="replay-info hidden"></div>
+        <div id="missBaseplate" class="miss-baseplate hidden">
+          <h3>Miss list</h3>
+          <div id="missCount" class="miss-count"></div>
+          <ul id="missList" class="miss-list">
+            <li class="miss-list-empty">No per-object miss data yet -- the parser only reads the header, not the LZMA-compressed input frames. Wire that up here.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <script src="/app.js"></script>
 </body>

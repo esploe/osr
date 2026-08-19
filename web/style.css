@@ -152,7 +152,30 @@ body {
 }
 #profileStatus { margin-bottom: 12px; }
 
-.settings-panel { max-height: 82vh; overflow-y: auto; }
+.settings-panel {
+  max-height: 82vh;
+  overflow-y: auto;
+  /* Reserve the scrollbar's space so form controls never sit underneath it,
+     plus a little extra gutter so the (right-aligned) checkboxes/selects
+     don't butt right up against the bar. */
+  scrollbar-gutter: stable;
+  padding-right: 10px;
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dim) transparent;
+}
+/* WebKit/Blink custom scrollbar -- thin, themed, and inset from the content
+   via a transparent border on the thumb so it reads as its own gutter on the
+   right rather than overlapping the options. */
+.settings-panel::-webkit-scrollbar { width: 12px; }
+.settings-panel::-webkit-scrollbar-track { background: transparent; }
+.settings-panel::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: 8px;
+  border: 3px solid var(--bg-panel);
+  background-clip: padding-box;
+}
+.settings-panel::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
 .opt-group { margin-bottom: 18px; }
 .opt-group h3 {
   font-size: 12px;
@@ -175,7 +198,12 @@ body {
 .opt-row .opt-control { display: flex; align-items: center; gap: 8px; }
 .opt-row input[type="range"] { width: 130px; }
 .opt-row .range-value { color: var(--text-dim); font-size: 12px; width: 42px; text-align: right; }
-.opt-row select { min-width: 150px; }
+.opt-row .opt-control { min-width: 0; }
+/* Cap select width so long option labels (e.g. the verbose codec choices)
+   truncate with the browser's own ellipsis instead of stretching the row
+   wider than the panel and forcing a horizontal scrollbar. Full text is
+   still visible when the dropdown is opened. */
+.opt-row select { min-width: 0; max-width: 210px; }
 
 input[type="checkbox"] {
   width: 18px; height: 18px; accent-color: var(--accent);
@@ -183,7 +211,10 @@ input[type="checkbox"] {
 
 .status-panel { position: sticky; top: 16px; }
 .job-idle { color: var(--text-dim); font-size: 13px; }
-.job-stage { font-size: 13px; color: var(--accent); margin-bottom: 8px; text-transform: capitalize; }
+.job-status-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.job-stage { font-size: 13px; color: var(--accent); text-transform: capitalize; }
+.job-eta { font-size: 12px; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.job-eta.hidden { display: none; }
 .progress-bar {
   height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; margin-bottom: 10px;
 }
@@ -214,4 +245,145 @@ input[type="checkbox"] {
   border-radius: 6px;
   font-size: 12px;
   min-width: 0;
+}
+
+/* Top-level tabs: Render / Jobs / Miss Analyzer */
+.main-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.main-tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-dim);
+  padding: 10px 18px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  position: relative;
+  top: 1px;
+}
+.main-tab-btn:hover { color: var(--text); }
+.main-tab-btn.active {
+  color: var(--text);
+  background: var(--bg-panel);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--bg-panel);
+}
+.main-tab-content.hidden { display: none; }
+
+/* Jobs tab layout */
+.jobs-layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 16px;
+  padding: 20px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .jobs-layout { grid-template-columns: 1fr; }
+}
+.jobs-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.jobs-list-header h2 { margin: 0; }
+.jobs-list-panel { max-height: 82vh; overflow-y: auto; }
+.jobs-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.jobs-list-empty { color: var(--text-dim); font-size: 13px; padding: 12px 0; }
+.job-row {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: border-color .1s, background .1s;
+}
+.job-row:hover { border-color: var(--accent-dim); }
+.job-row.selected { border-color: var(--accent); background: #2a2038; color: var(--text); }
+.job-row .job-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.job-row .job-row-id { font-family: "Consolas", monospace; font-size: 11px; color: var(--text-dim); }
+.job-row .job-row-player { color: var(--text); font-weight: 600; }
+.job-row .job-row-meta { font-size: 11px; color: var(--text-dim); }
+.job-row .job-row-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--border);
+}
+.job-row .job-row-status.queued { color: var(--text-dim); }
+.job-row .job-row-status.running { color: var(--accent); border-color: var(--accent-dim); }
+.job-row .job-row-status.done { color: var(--ok); border-color: var(--ok); }
+.job-row .job-row-status.error { color: var(--err); border-color: var(--err); }
+
+.jobs-detail-title {
+  font-family: "Consolas", monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+/* Miss analyzer */
+.miss-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 900px);
+  justify-content: center;
+  padding: 20px;
+}
+.miss-panel h2 .pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+.miss-baseplate { margin-top: 16px; }
+.miss-baseplate h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin: 0 0 10px;
+}
+.miss-count { font-size: 13px; margin-bottom: 8px; }
+.miss-count b { color: var(--err); }
+.miss-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.miss-list-empty {
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--text-dim);
+  font-size: 12px;
 }

@@ -35,6 +35,10 @@ renderRouter.post("/", upload.single("replay"), (req, res) => {
   res.json({ jobId: job.id });
 });
 
+renderRouter.get("/", (req, res) => {
+  res.json(queue.list().map((j) => j.toJSON()));
+});
+
 renderRouter.get("/:id", (req, res) => {
   const job = queue.get(req.params.id);
   if (!job) return res.status(404).send("Unknown job");
@@ -58,9 +62,16 @@ renderRouter.get("/:id/events", (req, res) => {
 
   // replay history so a client connecting mid-job isn't lost
   for (const entry of job.logs) send("log", entry);
-  send("stage", { stage: job.stage, progress: job.progress });
+  send("stage", { stage: job.stage, progress: job.progress, eta: job.eta, speed: job.speed });
   if (job.shareUrl) send("share", job.shareUrl);
   send("status", job.status);
+
+  // Nothing more will ever come from a job that has already finished --
+  // close the stream immediately so a client tailing a finished job
+  // doesn't hang onto an idle connection forever.
+  if (job.status === "done" || job.status === "error") {
+    return res.end();
+  }
 
   const onLog = (entry) => send("log", entry);
   const onStage = (s) => send("stage", s);

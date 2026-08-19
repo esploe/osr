@@ -4,6 +4,7 @@ const state = {
   replayMeta: null,
   scoreUrlMode: false,
   skins: [],
+  jobsDetail: { es: null, jobId: null },
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -17,11 +18,28 @@ async function init() {
   await loadSkins();
   await loadProfilesList();
   wireTabs();
+  wireMainTabs();
   wireReplayInput();
   wireSkinUpload();
   wireRenderButton();
   wireShareButtons();
   wireProfileButtons();
+  wireJobsTab();
+  wireMissAnalyzer();
+}
+
+function wireMainTabs() {
+  document.querySelectorAll(".main-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.mainTab;
+      document.querySelectorAll(".main-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".main-tab-content").forEach((el) => {
+        el.classList.toggle("hidden", el.dataset.mainTabContent !== tab);
+      });
+      if (tab === "jobs") loadJobsList();
+      if (tab !== "jobs") closeJobsDetail();
+    });
+  });
 }
 
 function wireTabs() {
@@ -349,6 +367,7 @@ async function startRender() {
   $("#jobLog").textContent = "";
   $("#progressFill").style.width = "0%";
   $("#jobStage").textContent = "submitting";
+  updateEta(null);
 
   const fd = new FormData();
   fd.append("settings", JSON.stringify(collectSettingsValues()));
@@ -373,9 +392,10 @@ function watchJob(jobId) {
   const es = new EventSource(`/api/render/${jobId}/events`);
   es.addEventListener("log", (e) => appendLog(JSON.parse(e.data).line));
   es.addEventListener("stage", (e) => {
-    const { stage, progress } = JSON.parse(e.data);
+    const { stage, progress, eta, speed } = JSON.parse(e.data);
     $("#jobStage").textContent = stage;
     if (typeof progress === "number") $("#progressFill").style.width = `${progress}%`;
+    updateEta(eta, speed);
   });
   es.addEventListener("share", (e) => showShareLink(JSON.parse(e.data)));
   es.addEventListener("status", (e) => {
@@ -384,6 +404,7 @@ function watchJob(jobId) {
       es.close();
       $("#progressFill").style.width = "100%";
       $("#jobStage").textContent = "done";
+      updateEta(null);
       const video = $("#resultVideo");
       const link = $("#downloadLink");
       video.src = `/api/render/${jobId}/download`;
@@ -397,6 +418,17 @@ function watchJob(jobId) {
     }
   });
   es.onerror = () => { /* connection will retry automatically until closed above */ };
+}
+
+function updateEta(eta, speed) {
+  const el = $("#jobEta");
+  if (eta) {
+    el.textContent = speed ? `~${eta} left · ${speed}x` : `~${eta} left`;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
 }
 
 function appendLog(line) {
@@ -427,6 +459,170 @@ function wireShareButtons() {
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ---- Jobs tab: render history + live log/progress for any job ----
+
+function wireJobsTab() {
+  $("#jobsRefreshBtn").addEventListener("click", loadJobsList);
+}
+
+async function loadJobsList() {
+  const hint = $("#jobsListHint");
+  const list = $("#jobsList");
+  hint.textContent = "Loading...";
+  try {
+    const res = await fetch("/api/render");
+    if (!res.ok) throw new Error(await res.text());
+    const jobs = await res.json();
+    if (!jobs.length) {
+      hint.textContent = "No jobs yet.";
+      list.innerHTML = "";
+      return;
+    }
+    hint.textContent = `${jobs.length} job${jobs.length === 1 ? "" : "s"}, newest first.`;
+    list.innerHTML = jobs.map(renderJobRowHtml).join("");
+    list.querySelectorAll(".job-row").forEach((row) => {
+      row.addEventListener("click", () => selectJob(row.dataset.jobId));
+    });
+    // Preserve selection highlight if the previously-viewed job is still in the list.
+    if (state.jobsDetail.jobId) {
+      const row = list.querySelector(`.job-row[data-job-id="${state.jobsDetail.jobId}"]`);
+      if (row) row.classList.add("selected");
+    }
+  } catch (err) {
+    hint.textContent = `Failed to load jobs: ${err.message}`;
+  }
+}
+
+function renderJobRowHtml(job) {
+  const meta = job.meta || {};
+  const player = meta.playerName ? escapeHtml(meta.playerName) : `<span class="job-row-id">${escapeHtml(job.id)}</span>`;
+  const metaLine = meta.playerName
+    ? `${escapeHtml(meta.mode || "")} · ${escapeHtml(meta.modsString || "")} · ${escapeHtml(job.id)}`
+    : "(replay metadata pending)";
+  const when = new Date(job.createdAt).toLocaleString();
+  return `
+    <div class="job-row" data-job-id="${escapeHtml(job.id)}">
+      <div class="job-row-top">
+        <span class="job-row-player">${player}</span>
+        <span class="job-row-status ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+      </div>
+      <div class="job-row-meta">${metaLine}</div>
+      <div class="job-row-meta">${escapeHtml(job.stage || "")} · ${when}</div>
+    </div>
+  `;
+}
+
+function selectJob(jobId) {
+  closeJobsDetail();
+  document.querySelectorAll("#jobsList .job-row").forEach((r) => {
+    r.classList.toggle("selected", r.dataset.jobId === jobId);
+  });
+  state.jobsDetail.jobId = jobId;
+
+  $("#jobsDetailEmpty").classList.add("hidden");
+  $("#jobsDetail").classList.remove("hidden");
+  $("#jobsDetailTitle").textContent = `Job ${jobId}`;
+  $("#jobsDetailStage").textContent = "connecting...";
+  $("#jobsDetailProgressFill").style.width = "0%";
+  $("#jobsDetailLog").textContent = "";
+  $("#jobsDetailResult").classList.add("hidden");
+  $("#jobsDetailShareRow").classList.add("hidden");
+  $("#jobsDetailEta").classList.add("hidden");
+
+  const es = new EventSource(`/api/render/${jobId}/events`);
+  state.jobsDetail.es = es;
+
+  es.addEventListener("log", (e) => {
+    const el = $("#jobsDetailLog");
+    el.textContent += JSON.parse(e.data).line + "\n";
+    el.scrollTop = el.scrollHeight;
+  });
+  es.addEventListener("stage", (e) => {
+    const { stage, progress, eta, speed } = JSON.parse(e.data);
+    $("#jobsDetailStage").textContent = stage;
+    if (typeof progress === "number") $("#jobsDetailProgressFill").style.width = `${progress}%`;
+    const etaEl = $("#jobsDetailEta");
+    if (eta) {
+      etaEl.textContent = speed ? `~${eta} left · ${speed}x` : `~${eta} left`;
+      etaEl.classList.remove("hidden");
+    } else {
+      etaEl.classList.add("hidden");
+    }
+  });
+  es.addEventListener("share", (e) => {
+    const url = JSON.parse(e.data);
+    $("#jobsDetailShareLink").value = url;
+    $("#jobsDetailOpenShare").href = url;
+    $("#jobsDetailShareRow").classList.remove("hidden");
+  });
+  es.addEventListener("status", (e) => {
+    const status = JSON.parse(e.data);
+    if (status === "done") {
+      $("#jobsDetailProgressFill").style.width = "100%";
+      $("#jobsDetailStage").textContent = "done";
+      $("#jobsDetailVideo").src = `/api/render/${jobId}/download`;
+      $("#jobsDetailDownload").href = `/api/render/${jobId}/download`;
+      $("#jobsDetailResult").classList.remove("hidden");
+      closeJobsDetail();
+    } else if (status === "error") {
+      $("#jobsDetailStage").textContent = "error";
+      closeJobsDetail();
+    }
+  });
+  es.onerror = () => { /* let it retry until we close */ };
+}
+
+function closeJobsDetail() {
+  if (state.jobsDetail.es) {
+    state.jobsDetail.es.close();
+    state.jobsDetail.es = null;
+  }
+}
+
+// ---- Miss analyzer: baseplate that reads header metadata via the existing endpoint ----
+
+function wireMissAnalyzer() {
+  const dz = $("#missDropzone");
+  const input = $("#missReplayFile");
+  dz.addEventListener("click", () => input.click());
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("drag");
+    if (e.dataTransfer.files[0]) handleMissReplayFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener("change", () => {
+    if (input.files[0]) handleMissReplayFile(input.files[0]);
+  });
+}
+
+async function handleMissReplayFile(file) {
+  const info = $("#missReplayInfo");
+  const baseplate = $("#missBaseplate");
+  info.classList.remove("hidden");
+  info.textContent = "Reading replay header...";
+  baseplate.classList.add("hidden");
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch("/api/replay/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: buf,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const meta = await res.json();
+    info.innerHTML =
+      `<b>${escapeHtml(meta.playerName)}</b> &middot; ${meta.mode} &middot; ${meta.modsString}<br>` +
+      `beatmap hash: ${meta.beatmapHash.slice(0, 12)}&hellip; &middot; ` +
+      `combo ${meta.maxCombo}${meta.perfectCombo ? " (FC)" : ""} &middot; score ${meta.totalScore.toLocaleString()}`;
+    $("#missCount").innerHTML = `Header reports <b>${meta.counts.countMiss}</b> miss${meta.counts.countMiss === 1 ? "" : "es"} on this replay.`;
+    baseplate.classList.remove("hidden");
+  } catch (err) {
+    info.textContent = `Couldn't read replay: ${err.message}`;
+  }
 }
 
 init();
