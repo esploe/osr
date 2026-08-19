@@ -715,12 +715,12 @@ function wireMissAnalyzer() {
 async function runMissAnalysis(doFetch) {
   const info = $("#missReplayInfo");
   const status = $("#missStatus");
-  const results = $("#missResults");
   info.classList.remove("hidden");
   info.textContent = "Analyzing...";
   status.textContent = "Parsing replay + resolving beatmap (this can take a few seconds on a cold cache)...";
-  results.classList.add("hidden");
-  $("#missSimPanel").classList.add("hidden");
+  for (const id of ["#missSimPanel", "#missListPanel", "#missPlayPanel"]) {
+    $(id).classList.add("hidden");
+  }
 
   try {
     const res = await doFetch();
@@ -830,7 +830,8 @@ function renderMissResults(data) {
 
   const detected = misses.length;
   const reported = header.counts.countMiss;
-  const summary = `Detected <b>${detected}</b> miss${detected === 1 ? "" : "es"} on hit-circles/slider-heads.`;
+  $("#missListCount").textContent = `${detected} miss${detected === 1 ? "" : "es"}`;
+  const summary = `Detected <b>${detected}</b> on hit-circles/slider-heads.`;
   const delta = detected === reported ? "matches replay header." : `(header says ${reported} -- differences are usually slider-body drops or spinner losses that this analyzer intentionally skips.)`;
   $("#missSummaryText").innerHTML = summary;
   $("#missSummaryStats").innerHTML =
@@ -870,7 +871,8 @@ function renderMissResults(data) {
     selectMiss(misses, 0, stats);
   }
 
-  $("#missResults").classList.remove("hidden");
+  $("#missListPanel").classList.remove("hidden");
+  $("#missPlayPanel").classList.remove("hidden");
 }
 
 // Miss-playback state -- one player instance shared across all misses so

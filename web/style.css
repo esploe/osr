@@ -493,26 +493,23 @@ input[type="checkbox"]:focus-visible {
   margin-bottom: 8px;
 }
 
-/* Miss analyzer */
+/* Miss analyzer -- two columns: a fixed sidebar (input, simulation, miss
+   list) and a flexible main column (playfield, legend). Both fill, so
+   there's no dead space regardless of what's shown. Stacks when narrow. */
 .miss-layout {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 440px) minmax(0, 1fr);
   gap: 16px;
   padding: 20px;
-}
-/* Input+simulation column beside a legend/reference card, results go
-   full-width below. On narrow screens everything stacks. */
-.miss-top {
-  display: grid;
-  grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
-  gap: 16px;
   align-items: start;
 }
 @media (max-width: 1000px) {
-  .miss-top { grid-template-columns: 1fr; }
+  .miss-layout { grid-template-columns: 1fr; }
 }
-.miss-top-left { display: flex; flex-direction: column; gap: 16px; }
-.miss-results-panel { animation: fadeUp .25s ease both; }
+.miss-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.miss-sim-panel, .miss-list-panel, .miss-play-panel { animation: fadeUp .25s ease both; }
+.miss-list-panel .miss-list { max-height: 62vh; overflow-y: auto; margin-top: 10px; padding-right: 4px; }
+.miss-play-panel h2 { flex-wrap: wrap; }
 
 /* Legend content flows in two columns so it fills the wide card. */
 .legend-grid {
@@ -674,34 +671,6 @@ input[type="checkbox"]:focus-visible {
   padding: 12px;
   color: var(--text-dim);
   font-size: 12px;
-}
-.miss-results { margin-top: 16px; }
-.miss-summary { margin-bottom: 12px; }
-.miss-detail {
-  display: grid;
-  grid-template-columns: 360px 1fr;
-  gap: 20px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .miss-detail { grid-template-columns: 1fr; }
-}
-.miss-list-wrap h3, .miss-playfield-wrap h3 {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--accent);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 6px;
-  margin: 0 0 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.miss-list-wrap {
-  max-height: 78vh;
-  overflow-y: auto;
-  padding-right: 6px;
 }
 .miss-list { counter-reset: missnum; }
 .miss-list-item {

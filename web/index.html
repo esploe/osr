@@ -136,42 +136,85 @@
 
   <div class="main-tab-content hidden" data-main-tab-content="miss">
     <main class="miss-layout">
-      <div class="miss-top">
-        <div class="miss-top-left">
-          <section class="panel miss-input-panel">
-            <h2>Miss analyzer</h2>
-            <p class="hint">
-              Drop a .osr replay (or paste a score URL). Every hit-circle and
-              slider-head with no key-press inside its circle in the OD-derived
-              50 window is flagged; spinners are skipped.
-            </p>
-            <div class="input-tabs">
-              <button class="miss-src-btn active" data-miss-src="upload">Upload .osr</button>
-              <button class="miss-src-btn" data-miss-src="url">Score URL</button>
+      <div class="miss-col miss-col-left">
+        <section class="panel miss-input-panel">
+          <h2>Miss analyzer</h2>
+          <p class="hint">
+            Drop a .osr replay (or paste a score URL). Every hit-circle and
+            slider-head with no key-press inside its circle in the OD-derived
+            50 window is flagged; spinners are skipped.
+          </p>
+          <div class="input-tabs">
+            <button class="miss-src-btn active" data-miss-src="upload">Upload .osr</button>
+            <button class="miss-src-btn" data-miss-src="url">Score URL</button>
+          </div>
+          <div class="miss-src-content" data-miss-src-content="upload">
+            <div id="missDropzone" class="dropzone">
+              <p>Drag &amp; drop a .osr file here, or click to browse</p>
+              <input id="missReplayFile" type="file" accept=".osr" hidden />
             </div>
-            <div class="miss-src-content" data-miss-src-content="upload">
-              <div id="missDropzone" class="dropzone">
-                <p>Drag &amp; drop a .osr file here, or click to browse</p>
-                <input id="missReplayFile" type="file" accept=".osr" hidden />
-              </div>
-            </div>
-            <div class="miss-src-content hidden" data-miss-src-content="url">
-              <label class="field">
-                <span>osu! score URL</span>
-                <input id="missScoreUrl" type="text" placeholder="https://osu.ppy.sh/scores/12345678" />
-              </label>
-              <button id="missAnalyzeUrlBtn" class="btn small" type="button">Analyze score</button>
-              <p class="hint">Requires an osu! API OAuth client on the server. The score must have a downloadable replay.</p>
-            </div>
-            <div id="missReplayInfo" class="replay-info hidden"></div>
-            <div id="missStatus" class="hint"></div>
-          </section>
+          </div>
+          <div class="miss-src-content hidden" data-miss-src-content="url">
+            <label class="field">
+              <span>osu! score URL</span>
+              <input id="missScoreUrl" type="text" placeholder="https://osu.ppy.sh/scores/12345678" />
+            </label>
+            <button id="missAnalyzeUrlBtn" class="btn small" type="button">Analyze score</button>
+            <p class="hint">Requires an osu! API OAuth client on the server. The score must have a downloadable replay.</p>
+          </div>
+          <div id="missReplayInfo" class="replay-info hidden"></div>
+          <div id="missStatus" class="hint"></div>
+        </section>
 
-          <section id="missSimPanel" class="panel miss-sim-panel hidden">
-            <h2>Score &amp; simulation</h2>
-            <div id="missSimBody"></div>
-          </section>
-        </div>
+        <section id="missSimPanel" class="panel miss-sim-panel hidden">
+          <h2>Score &amp; simulation</h2>
+          <div id="missSimBody"></div>
+        </section>
+
+        <section id="missListPanel" class="panel miss-list-panel hidden">
+          <h2>Missed objects <span id="missListCount" class="pill"></span></h2>
+          <div id="missSummaryText" class="miss-count"></div>
+          <div id="missSummaryStats" class="hint"></div>
+          <ol id="missList" class="miss-list"></ol>
+        </section>
+      </div>
+
+      <div class="miss-col miss-col-right">
+        <section id="missPlayPanel" class="panel miss-play-panel hidden">
+          <h2>
+            Playback <span id="missSelectedLabel" class="pill">nothing selected</span>
+            <span class="miss-zoom-controls">
+              <button id="missZoomOut" class="btn small" type="button" title="Zoom out">−</button>
+              <button id="missZoomReset" class="btn small" type="button" title="Reset view">⤢</button>
+              <button id="missZoomIn" class="btn small" type="button" title="Zoom in">+</button>
+            </span>
+          </h2>
+          <svg id="missPlayfield" class="miss-playfield" viewBox="-128 -96 768 576" preserveAspectRatio="xMidYMid meet">
+            <g id="missZoomGroup">
+              <g id="missBaseGroup"></g>
+              <g id="missOverlayGroup"></g>
+            </g>
+          </svg>
+          <div id="missDiagnosis" class="miss-diagnosis"></div>
+          <div class="miss-player">
+            <div class="miss-player-controls">
+              <button id="missPlayBtn" class="btn small" type="button">▶ Play</button>
+              <button id="missRestartBtn" class="btn small" type="button">↺ Restart</button>
+              <select id="missSpeed" class="miss-speed">
+                <option value="1">1×</option>
+                <option value="0.5" selected>0.5×</option>
+                <option value="0.25">0.25×</option>
+                <option value="0.1">0.1×</option>
+              </select>
+              <span id="missPlayTime" class="miss-play-time">--</span>
+            </div>
+            <input id="missScrub" class="miss-scrub" type="range" min="0" max="1000" step="1" value="0" />
+            <svg id="missTimingStrip" class="miss-timing-strip" viewBox="0 0 1000 44" preserveAspectRatio="none"></svg>
+          </div>
+          <p class="hint">
+            Opens paused on the miss moment. <b>Diamonds</b> = taps at the exact cursor spot (green on the note, red + leader line if off), labelled with timing offset. Cyan trail = recent cursor path (white where a key was held); white dot = playhead. Approach rings shrink onto notes like in-game. Hit Play to watch the run-in, or scrub. <b>Scroll to zoom</b> (or the +/−/⤢ buttons), drag to pan. <b>Timing strip</b> below = 300/100/50 windows (green/yellow/orange) with a tick per tap.
+          </p>
+        </section>
 
         <section class="panel miss-legend-panel">
           <h2>How to read it</h2>
@@ -209,54 +252,6 @@
           </div>
         </section>
       </div>
-
-      <section id="missResults" class="panel miss-results-panel hidden">
-          <div class="miss-summary">
-            <div id="missSummaryText" class="miss-count"></div>
-            <div id="missSummaryStats" class="hint"></div>
-          </div>
-          <div class="miss-detail">
-            <div class="miss-list-wrap">
-              <h3>Missed objects</h3>
-              <ol id="missList" class="miss-list"></ol>
-            </div>
-            <div class="miss-playfield-wrap">
-              <h3>
-                Playback <span id="missSelectedLabel" class="pill">nothing selected</span>
-                <span class="miss-zoom-controls">
-                  <button id="missZoomOut" class="btn small" type="button" title="Zoom out">−</button>
-                  <button id="missZoomReset" class="btn small" type="button" title="Reset view">⤢</button>
-                  <button id="missZoomIn" class="btn small" type="button" title="Zoom in">+</button>
-                </span>
-              </h3>
-              <svg id="missPlayfield" class="miss-playfield" viewBox="-128 -96 768 576" preserveAspectRatio="xMidYMid meet">
-                <g id="missZoomGroup">
-                  <g id="missBaseGroup"></g>
-                  <g id="missOverlayGroup"></g>
-                </g>
-              </svg>
-              <div id="missDiagnosis" class="miss-diagnosis"></div>
-              <div class="miss-player">
-                <div class="miss-player-controls">
-                  <button id="missPlayBtn" class="btn small" type="button">▶ Play</button>
-                  <button id="missRestartBtn" class="btn small" type="button">↺ Restart</button>
-                  <select id="missSpeed" class="miss-speed">
-                    <option value="1">1×</option>
-                    <option value="0.5" selected>0.5×</option>
-                    <option value="0.25">0.25×</option>
-                    <option value="0.1">0.1×</option>
-                  </select>
-                  <span id="missPlayTime" class="miss-play-time">--</span>
-                </div>
-                <input id="missScrub" class="miss-scrub" type="range" min="0" max="1000" step="1" value="0" />
-                <svg id="missTimingStrip" class="miss-timing-strip" viewBox="0 0 1000 44" preserveAspectRatio="none"></svg>
-              </div>
-              <p class="hint">
-                Opens paused on the miss moment. <b>Diamonds</b> = taps at the exact cursor spot (green on the note, red + leader line if off), labelled with timing offset. Cyan trail = recent cursor path (white where a key was held); white dot = playhead. Approach rings shrink onto notes like in-game. Hit Play to watch the run-in, or scrub. <b>Scroll to zoom</b> (or the +/−/⤢ buttons), drag to pan. <b>Timing strip</b> below = 300/100/50 windows (green/yellow/orange) with a tick per tap.
-              </p>
-            </div>
-          </div>
-      </section>
     </main>
   </div>
 
