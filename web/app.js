@@ -720,6 +720,7 @@ async function runMissAnalysis(doFetch) {
   info.textContent = "Analyzing...";
   status.textContent = "Parsing replay + resolving beatmap (this can take a few seconds on a cold cache)...";
   results.classList.add("hidden");
+  $("#missSimPanel").classList.add("hidden");
 
   try {
     const res = await doFetch();
@@ -768,12 +769,64 @@ async function handleMissScoreUrl() {
   );
 }
 
+// osu!standard accuracy + letter grade from a judgement breakdown.
+function computeAccGrade(n300, n100, n50, n0) {
+  const total = n300 + n100 + n50 + n0;
+  if (total === 0) return { acc: 100, grade: "SS" };
+  const acc = ((300 * n300 + 100 * n100 + 50 * n50) / (300 * total)) * 100;
+  const r300 = n300 / total;
+  const r50 = n50 / total;
+  let grade;
+  if (n100 === 0 && n50 === 0 && n0 === 0) grade = "SS";
+  else if (r300 > 0.9 && r50 < 0.01 && n0 === 0) grade = "S";
+  else if ((r300 > 0.8 && n0 === 0) || r300 > 0.9) grade = "A";
+  else if ((r300 > 0.7 && n0 === 0) || r300 > 0.8) grade = "B";
+  else if (r300 > 0.6) grade = "C";
+  else grade = "D";
+  return { acc, grade };
+}
+
+// "What if you hadn't missed" -- turns every header miss into a 300 and
+// shows the accuracy/grade the otherwise-identical play would have hit.
+function renderSimulation(header, detectedMisses) {
+  const c = header.counts;
+  const cur = computeAccGrade(c.count300, c.count100, c.count50, c.countMiss);
+  const sim = computeAccGrade(c.count300 + c.countMiss, c.count100, c.count50, 0);
+  const accDelta = sim.acc - cur.acc;
+
+  const col = (label, g, accStr, sub) => `
+    <div class="sim-col">
+      <div class="sim-col-label">${label}</div>
+      <div class="sim-grade grade-${g.grade}">${g.grade}</div>
+      <div class="sim-acc">${accStr}</div>
+      <div class="sim-sub">${sub}</div>
+    </div>`;
+
+  $("#missSimBody").innerHTML =
+    `<div class="sim-cols">` +
+      col("This play", cur, `${cur.acc.toFixed(2)}%`, `${header.maxCombo}× combo`) +
+      `<div class="sim-arrow">→</div>` +
+      col("No misses", sim, `${sim.acc.toFixed(2)}%`, accDelta >= 0.005 ? `+${accDelta.toFixed(2)}% acc` : "same") +
+    `</div>` +
+    `<div class="sim-breakdown">` +
+      `<span class="j j300">${c.count300}</span>` +
+      `<span class="j j100">${c.count100}</span>` +
+      `<span class="j j50">${c.count50}</span>` +
+      `<span class="j jmiss">${c.countMiss} miss</span>` +
+    `</div>` +
+    `<p class="hint">Recovers all <b>${c.countMiss}</b> of the header's misses as 300s — an upper bound on the accuracy this play could have reached. That count includes slider-end and spinner misses, so it can exceed the <b>${detectedMisses}</b> the playfield analyzer marks.</p>`;
+
+  $("#missSimPanel").classList.remove("hidden");
+}
+
 function renderMissResults(data) {
   const { header, beatmap, misses, stats, warning } = data;
   $("#missReplayInfo").innerHTML =
     `<b>${escapeHtml(header.playerName)}</b> &middot; ${escapeHtml(beatmap.artist)} - ${escapeHtml(beatmap.title)} [${escapeHtml(beatmap.version)}]<br>` +
     `mods ${escapeHtml(header.modsString)} &middot; combo ${header.maxCombo}${header.perfectCombo ? " (FC)" : ""} &middot; ` +
     `header reports <b>${header.counts.countMiss}</b> miss${header.counts.countMiss === 1 ? "" : "es"}`;
+
+  renderSimulation(header, misses.length);
 
   const detected = misses.length;
   const reported = header.counts.countMiss;

@@ -137,64 +137,76 @@
   <div class="main-tab-content hidden" data-main-tab-content="miss">
     <main class="miss-layout">
       <div class="miss-top">
-        <section class="panel miss-input-panel">
-          <h2>Miss analyzer</h2>
-          <p class="hint">
-            Drop a .osr replay (or paste a score URL). Every hit-circle and
-            slider-head with no key-press inside its circle in the OD-derived
-            50 window is flagged; spinners are skipped.
-          </p>
-          <div class="input-tabs">
-            <button class="miss-src-btn active" data-miss-src="upload">Upload .osr</button>
-            <button class="miss-src-btn" data-miss-src="url">Score URL</button>
-          </div>
-          <div class="miss-src-content" data-miss-src-content="upload">
-            <div id="missDropzone" class="dropzone">
-              <p>Drag &amp; drop a .osr file here, or click to browse</p>
-              <input id="missReplayFile" type="file" accept=".osr" hidden />
+        <div class="miss-top-left">
+          <section class="panel miss-input-panel">
+            <h2>Miss analyzer</h2>
+            <p class="hint">
+              Drop a .osr replay (or paste a score URL). Every hit-circle and
+              slider-head with no key-press inside its circle in the OD-derived
+              50 window is flagged; spinners are skipped.
+            </p>
+            <div class="input-tabs">
+              <button class="miss-src-btn active" data-miss-src="upload">Upload .osr</button>
+              <button class="miss-src-btn" data-miss-src="url">Score URL</button>
             </div>
-          </div>
-          <div class="miss-src-content hidden" data-miss-src-content="url">
-            <label class="field">
-              <span>osu! score URL</span>
-              <input id="missScoreUrl" type="text" placeholder="https://osu.ppy.sh/scores/12345678" />
-            </label>
-            <button id="missAnalyzeUrlBtn" class="btn small" type="button">Analyze score</button>
-            <p class="hint">Requires an osu! API OAuth client on the server. The score must have a downloadable replay.</p>
-          </div>
-          <div id="missReplayInfo" class="replay-info hidden"></div>
-          <div id="missStatus" class="hint"></div>
-        </section>
+            <div class="miss-src-content" data-miss-src-content="upload">
+              <div id="missDropzone" class="dropzone">
+                <p>Drag &amp; drop a .osr file here, or click to browse</p>
+                <input id="missReplayFile" type="file" accept=".osr" hidden />
+              </div>
+            </div>
+            <div class="miss-src-content hidden" data-miss-src-content="url">
+              <label class="field">
+                <span>osu! score URL</span>
+                <input id="missScoreUrl" type="text" placeholder="https://osu.ppy.sh/scores/12345678" />
+              </label>
+              <button id="missAnalyzeUrlBtn" class="btn small" type="button">Analyze score</button>
+              <p class="hint">Requires an osu! API OAuth client on the server. The score must have a downloadable replay.</p>
+            </div>
+            <div id="missReplayInfo" class="replay-info hidden"></div>
+            <div id="missStatus" class="hint"></div>
+          </section>
+
+          <section id="missSimPanel" class="panel miss-sim-panel hidden">
+            <h2>Score &amp; simulation</h2>
+            <div id="missSimBody"></div>
+          </section>
+        </div>
 
         <section class="panel miss-legend-panel">
           <h2>How to read it</h2>
-          <div class="legend-block">
-            <h4>Miss categories</h4>
-            <ul class="legend-list">
-              <li><span class="miss-item-cat cat-no_tap">no tap</span> never pressed a key near the note</li>
-              <li><span class="miss-item-cat cat-aim_miss">aim off</span> tapped in time, but the cursor wasn't on the note</li>
-              <li><span class="miss-item-cat cat-early_tap">early / late</span> aim was on the note, tapped outside the timing window</li>
-              <li><span class="miss-item-cat cat-both_off">both off</span> wrong place and wrong time</li>
-            </ul>
+          <div class="legend-grid">
+            <div class="legend-block">
+              <h4>Miss categories</h4>
+              <ul class="legend-list">
+                <li><span class="miss-item-cat cat-no_tap">no tap</span> never pressed a key near the note</li>
+                <li><span class="miss-item-cat cat-aim_miss">aim off</span> tapped in time, cursor wasn't on the note</li>
+                <li><span class="miss-item-cat cat-early_tap">early / late</span> on the note, tapped out of window</li>
+                <li><span class="miss-item-cat cat-both_off">both off</span> wrong place and wrong time</li>
+              </ul>
+            </div>
+            <div class="legend-block">
+              <h4>On the playfield</h4>
+              <ul class="legend-list">
+                <li><span class="legend-dot ring"></span> dashed ring = judgment radius</li>
+                <li><span class="legend-dot green"></span> tap that landed on the note</li>
+                <li><span class="legend-dot red"></span> tap that missed (line to the note)</li>
+                <li><span class="legend-dot cyan"></span> cursor path (white = key held)</li>
+                <li><span class="legend-dot white"></span> playhead during playback</li>
+              </ul>
+            </div>
+            <div class="legend-block">
+              <h4>Timing strip</h4>
+              <ul class="legend-list">
+                <li><span class="legend-dot band-green"></span> <span class="legend-dot band-yellow"></span> <span class="legend-dot band-orange"></span> = 300 / 100 / 50 windows</li>
+                <li>each vertical tick is one tap at its real offset</li>
+              </ul>
+            </div>
+            <div class="legend-block">
+              <h4>Scope</h4>
+              <p class="hint" style="margin-top:0">osu!standard only. Sliders judged as their head; spinners skipped. DT / HT / HR / EZ handled via effective OD / CS / AR.</p>
+            </div>
           </div>
-          <div class="legend-block">
-            <h4>On the playfield</h4>
-            <ul class="legend-list">
-              <li><span class="legend-dot ring"></span> dashed ring = the missed note's judgment radius</li>
-              <li><span class="legend-dot green"></span> diamond = a tap that landed on the note</li>
-              <li><span class="legend-dot red"></span> diamond = a tap that missed (line points to the note)</li>
-              <li><span class="legend-dot cyan"></span> trail = cursor path (white where a key is held)</li>
-              <li><span class="legend-dot white"></span> dot = playhead while a replay is playing</li>
-            </ul>
-          </div>
-          <div class="legend-block">
-            <h4>Timing strip</h4>
-            <ul class="legend-list">
-              <li><span class="legend-dot band-green"></span> / <span class="legend-dot band-yellow"></span> / <span class="legend-dot band-orange"></span> = 300 / 100 / 50 hit windows</li>
-              <li>each vertical tick is one tap, placed at its real timing offset</li>
-            </ul>
-          </div>
-          <p class="hint">osu!standard only. Sliders judged as their head; spinners skipped. DT / HT / HR / EZ handled via effective OD / CS / AR.</p>
         </section>
       </div>
 
