@@ -448,6 +448,19 @@ input[type="checkbox"] {
   padding: 1px 6px;
   border-radius: 999px;
 }
+.miss-item-cat {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.miss-item-cat.cat-no_tap { color: #ff4d6d; border-color: #ff4d6d; }
+.miss-item-cat.cat-aim_miss { color: #ffcf40; border-color: #ffcf40; }
+.miss-item-cat.cat-early_tap, .miss-item-cat.cat-late_tap { color: #66d9ff; border-color: #66d9ff; }
+.miss-item-cat.cat-both_off { color: #ff4d6d; border-color: #ff4d6d; }
+.miss-item-cat.cat-unknown { color: var(--text-dim); }
 .miss-item-detail { color: var(--text-dim); font-size: 11px; }
 .miss-playfield {
   width: 100%;
@@ -477,3 +490,22 @@ input[type="checkbox"] {
   width: 100%;
   accent-color: var(--accent);
 }
+.miss-timing-strip {
+  width: 100%;
+  height: 44px;
+  background: transparent;
+}
+.miss-diagnosis {
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+  margin: 10px 0 4px;
+  line-height: 1.5;
+}
+.miss-diagnosis[data-category="no_tap"] { border-left-color: #ff4d6d; }
+.miss-diagnosis[data-category="aim_miss"] { border-left-color: #ffcf40; }
+.miss-diagnosis[data-category="early_tap"], .miss-diagnosis[data-category="late_tap"] { border-left-color: #66d9ff; }
+.miss-diagnosis[data-category="both_off"] { border-left-color: #ff4d6d; }

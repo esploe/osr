@@ -161,6 +161,7 @@
             <div class="miss-playfield-wrap">
               <h3>Playback <span id="missSelectedLabel" class="pill">nothing selected</span></h3>
               <svg id="missPlayfield" class="miss-playfield" viewBox="-128 -96 768 576" preserveAspectRatio="xMidYMid meet"></svg>
+              <div id="missDiagnosis" class="miss-diagnosis"></div>
               <div class="miss-player">
                 <div class="miss-player-controls">
                   <button id="missPlayBtn" class="btn small" type="button">▶ Play</button>
@@ -174,9 +175,10 @@
                   <span id="missPlayTime" class="miss-play-time">--</span>
                 </div>
                 <input id="missScrub" class="miss-scrub" type="range" min="0" max="1000" step="1" value="0" />
+                <svg id="missTimingStrip" class="miss-timing-strip" viewBox="0 0 1000 44" preserveAspectRatio="none"></svg>
               </div>
               <p class="hint">
-                Scrub the timeline to move through the ±few seconds around the miss, or hit Play to watch it back in real time (0.5× default). Approach circles shrink onto their objects the same way they do in the game. Cursor trail = last ~300ms of movement; brightest at the current playhead. Missed object flashes red once its judgment window closes without a hit.
+                <b>Cursor dot</b> is cyan idle, glows white while a hit-key is held, and flashes a bright ring at the exact frame of every tap. <b>Timing strip</b> below the scrub bar shows the object's hit windows (green 300, yellow 100, orange 50) as colored bands and every tap as a vertical tick — colored by whether the aim was on the note or off. Playback defaults to 0.5×.
               </p>
             </div>
           </div>

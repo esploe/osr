@@ -661,16 +661,22 @@ function renderMissResults(data) {
     list.innerHTML = `<li class="miss-list-empty">No missed hit-circles or slider-heads detected. Nice.</li>`;
   } else {
     list.innerHTML = misses.map((m, i) => {
-      const cursor = m.cursor
-        ? `cursor @ (${m.cursor.x.toFixed(0)}, ${m.cursor.y.toFixed(0)}), ${m.cursor.dist.toFixed(0)}px away at ${formatMs(m.cursor.t)}`
-        : `no cursor frame captured near this object`;
+      const cat = m.diagnosis?.category || "unknown";
+      const catLabel = {
+        no_tap: "no tap",
+        aim_miss: "aim off",
+        early_tap: "early",
+        late_tap: "late",
+        both_off: "both off",
+        unknown: "?",
+      }[cat] || cat;
       return `
-        <li class="miss-list-item" data-miss-index="${i}">
+        <li class="miss-list-item" data-miss-index="${i}" data-category="${cat}">
           <div class="miss-item-top">
             <span class="miss-item-time">${formatMs(m.objectTime)}</span>
-            <span class="miss-item-kind">${escapeHtml(m.kind)}</span>
+            <span class="miss-item-cat cat-${cat}">${escapeHtml(catLabel)}</span>
           </div>
-          <div class="miss-item-detail">obj #${m.objectIndex} @ (${m.objectX}, ${m.objectY}) &middot; ${cursor}</div>
+          <div class="miss-item-detail">${escapeHtml(m.diagnosis?.text || "no diagnosis")}</div>
         </li>
       `;
     }).join("");
@@ -707,6 +713,16 @@ function selectMiss(misses, index, stats) {
   if (!m) return;
   $("#missSelectedLabel").textContent = `#${m.objectIndex} @ ${formatMs(m.objectTime)}`;
 
+  // Diagnosis line -- the one-glance "why did this miss happen".
+  const diagEl = $("#missDiagnosis");
+  if (m.diagnosis) {
+    diagEl.dataset.category = m.diagnosis.category;
+    diagEl.textContent = m.diagnosis.text;
+    diagEl.classList.remove("hidden");
+  } else {
+    diagEl.classList.add("hidden");
+  }
+
   const ctx = m.context || { objects: [], cursor: [], windowStart: m.objectTime - 1500, windowEnd: m.objectTime + 500 };
   const tMin = ctx.windowStart ?? m.objectTime - 3000;
   const tMax = ctx.windowEnd ?? m.objectTime + 1500;
@@ -721,6 +737,8 @@ function selectMiss(misses, index, stats) {
     currentT: tMin,
     lastRafWall: 0,
   });
+
+  renderTimingStrip();
 
   const scrub = $("#missScrub");
   scrub.min = tMin;
@@ -779,6 +797,11 @@ function renderMissPlayback() {
   // Cursor position at currentT: linear interpolation between straddling frames.
   const cursorAt = cursorPositionAt(cursor, currentT);
   const trail = cursorTrail(cursor, currentT, 300);
+  // Key state at currentT: use the most-recent frame's keys bitfield.
+  // Rising-edge detection ("just tapped") uses the previous frame's
+  // keys, so the cursor visibly flashes on the exact tap frame.
+  const keysNow = cursorKeysAt(cursor, currentT);
+  const justPressed = cursorJustPressed(cursor, currentT, 60); // "flash" for 60ms after a press
 
   const parts = [];
   // Background covers the whole padded viewBox so the padded area isn't
@@ -832,18 +855,137 @@ function renderMissPlayback() {
     }
   }
 
-  // Cursor trail (last ~300ms).
+  // Cursor trail (last ~300ms). Segments where a hit-key is being held
+  // draw brighter/whiter so key-down periods are visually obvious even
+  // without watching the cursor dot itself.
   if (trail.length >= 2) {
-    const d = "M " + trail.map(([_, x, y]) => `${x} ${y}`).join(" L ");
-    parts.push(`<path d="${d}" fill="none" stroke="#66d9ff" stroke-width="1.5" opacity="0.55" />`);
+    for (let i = 1; i < trail.length; i++) {
+      const [t1, x1, y1, k1] = trail[i - 1];
+      const [t2, x2, y2] = trail[i];
+      const held = (k1 & 0b1111) !== 0;
+      parts.push(
+        `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
+          `stroke="${held ? "#ffffff" : "#66d9ff"}" stroke-width="${held ? 2.2 : 1.4}" ` +
+          `opacity="${held ? 0.9 : 0.5}" stroke-linecap="round" />`
+      );
+    }
   }
-  // Cursor dot at the playhead.
+  // Cursor dot at the playhead. Grows and gains a bright ring when
+  // a hit-key is held, and adds an extra flash ring on the exact
+  // rising-edge frame so taps are visually unmissable.
   if (cursorAt) {
-    parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="5" fill="#66d9ff" stroke="#0e0c14" stroke-width="1.5" />`);
+    const held = (keysNow & 0b1111) !== 0;
+    const dotFill = held ? "#ffffff" : "#66d9ff";
+    const dotR = held ? 6 : 5;
+    parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR}" fill="${dotFill}" stroke="#0e0c14" stroke-width="1.5" />`);
+    if (held) {
+      parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${dotR + 4}" fill="none" stroke="#ffffff" stroke-width="1.2" opacity="0.8" />`);
+    }
+    if (justPressed) {
+      const age = (currentT - justPressed.t) / 60;
+      const flashR = dotR + 4 + age * 16;
+      parts.push(`<circle cx="${cursorAt.x}" cy="${cursorAt.y}" r="${flashR}" fill="none" stroke="#ffcf40" stroke-width="2" opacity="${1 - age}" />`);
+    }
   }
 
   svg.innerHTML = parts.join("");
   $("#missPlayTime").textContent = `t = ${formatOffsetMs(currentT - m.objectTime)} (${formatMs(currentT)})`;
+  updateTimingStripPlayhead();
+}
+
+// Timing strip below the scrub bar: colored hit-window bands + tap
+// tick marks + playhead. This is what turns "did they tap or not" and
+// "was the tap early / late / aimed off" into a single glance.
+function renderTimingStrip() {
+  const { miss: m, stats } = missPlayer;
+  const svg = $("#missTimingStrip");
+  if (!m || !stats) { svg.innerHTML = ""; return; }
+  const hw50 = stats.hitWindow50Ms;
+  // Fixed time span so the visual scale is comparable across misses:
+  // ±300ms around the object's own hit time.
+  const span = 300;
+  const w = 1000, h = 44;
+  const objectPx = w / 2;
+  const pxPerMs = (w / 2) / span;
+
+  const parts = [];
+  parts.push(`<rect x="0" y="0" width="${w}" height="${h}" fill="#161320" rx="6" />`);
+
+  // Hit-window bands from the OD-derived numbers. Widths are the
+  // canonical std values relative to the 50 window:
+  //   hw300 = 80 - 6*OD   (≈ 0.4x hw50)
+  //   hw100 = 140 - 8*OD  (≈ 0.7x hw50)
+  //   hw50  = 200 - 10*OD
+  const OD = stats.effectiveOD;
+  const hw300 = Math.max(0, 80 - 6 * OD);
+  const hw100 = Math.max(0, 140 - 8 * OD);
+  const band = (winMs, color, opacity) => {
+    const x = objectPx - winMs * pxPerMs;
+    const bw = winMs * 2 * pxPerMs;
+    parts.push(`<rect x="${x}" y="6" width="${bw}" height="${h - 12}" fill="${color}" opacity="${opacity}" rx="3" />`);
+  };
+  band(hw50, "#ff8a3d", 0.20);   // 50 = orange
+  band(hw100, "#ffd23d", 0.28);  // 100 = yellow
+  band(hw300, "#6ee7a0", 0.32);  // 300 = green
+
+  // Center line = the object's ideal hit time.
+  parts.push(`<line x1="${objectPx}" y1="4" x2="${objectPx}" y2="${h - 4}" stroke="var(--accent)" stroke-width="1.4" />`);
+
+  // Every tap in the ±TAP_LOOKAROUND (≥ ±span here) as a tick,
+  // colored by whether the aim was on the note.
+  for (const tap of (m.taps || [])) {
+    if (Math.abs(tap.dOffset) > span) continue;
+    const x = objectPx + tap.dOffset * pxPerMs;
+    const color = tap.inRadius ? "#6ee7a0" : "#ff4d6d";
+    parts.push(`<line x1="${x}" y1="4" x2="${x}" y2="${h - 4}" stroke="${color}" stroke-width="2" opacity="0.95" />`);
+    parts.push(`<circle cx="${x}" cy="${h - 4}" r="2.2" fill="${color}" />`);
+  }
+
+  // Placeholder for the playhead (updated separately without a full re-render).
+  parts.push(`<line id="missTimingPlayhead" x1="-99" y1="0" x2="-99" y2="${h}" stroke="#ffffff" stroke-width="1.2" opacity="0.85" />`);
+
+  // Legend anchor points (labels are tiny, hint text under the strip
+  // spells them out for anyone who can't read the color).
+  parts.push(`<text x="6" y="${h - 6}" font-size="9" fill="var(--text-dim)" font-family="Consolas, monospace">-${span}ms</text>`);
+  parts.push(`<text x="${w - 6}" y="${h - 6}" font-size="9" fill="var(--text-dim)" font-family="Consolas, monospace" text-anchor="end">+${span}ms</text>`);
+
+  svg.innerHTML = parts.join("");
+}
+
+function updateTimingStripPlayhead() {
+  const { miss: m, currentT } = missPlayer;
+  const ph = document.getElementById("missTimingPlayhead");
+  if (!ph || !m) return;
+  const span = 300;
+  const w = 1000;
+  const x = (w / 2) + (currentT - m.objectTime) * ((w / 2) / span);
+  if (x < 0 || x > w) { ph.setAttribute("x1", -99); ph.setAttribute("x2", -99); return; }
+  ph.setAttribute("x1", x);
+  ph.setAttribute("x2", x);
+}
+
+function cursorKeysAt(cursor, t) {
+  if (!cursor.length) return 0;
+  // Walk to the latest frame at or before t.
+  let lo = 0, hi = cursor.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (cursor[mid][0] <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  return cursor[lo][3] || 0;
+}
+
+function cursorJustPressed(cursor, t, withinMs) {
+  // Look backwards for a rising-edge press within `withinMs` of t.
+  for (let i = cursor.length - 1; i > 0; i--) {
+    const ft = cursor[i][0];
+    if (ft > t) continue;
+    if (t - ft > withinMs) return null;
+    const pressed = (cursor[i][3] || 0) & 0b1111 & ~((cursor[i - 1][3] || 0) & 0b1111);
+    if (pressed) return { t: ft, keys: pressed };
+  }
+  return null;
 }
 
 function cursorPositionAt(cursor, t) {
