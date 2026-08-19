@@ -27,6 +27,87 @@ async function init() {
   wireJobsTab();
   wireMissAnalyzer();
   wireMissPlayer();
+  wireMissZoom();
+}
+
+// ---- Miss playfield zoom / pan ----
+// Applies a transform to #missZoomGroup. Coordinates are in the SVG's
+// own viewBox units (-128..640 x, -96..480 y). Wheel zooms toward the
+// pointer; drag pans; the buttons zoom toward the playfield centre.
+const missZoom = { scale: 1, tx: 0, ty: 0 };
+const MISS_VB = { x: -128, y: -96, w: 768, h: 576 };
+
+function applyMissZoom() {
+  const g = document.getElementById("missZoomGroup");
+  if (g) g.setAttribute("transform", `translate(${missZoom.tx} ${missZoom.ty}) scale(${missZoom.scale})`);
+}
+
+function resetMissZoom() {
+  missZoom.scale = 1; missZoom.tx = 0; missZoom.ty = 0;
+  applyMissZoom();
+}
+
+// Convert a client-space (pixel) point on the SVG element into the SVG's
+// viewBox coordinate space, accounting for preserveAspectRatio letterboxing.
+function svgPointFromClient(svg, clientX, clientY) {
+  const rect = svg.getBoundingClientRect();
+  // The SVG uses xMidYMid meet -> uniform scale, centred. Work out the
+  // rendered content box inside the element.
+  const scale = Math.min(rect.width / MISS_VB.w, rect.height / MISS_VB.h);
+  const renderW = MISS_VB.w * scale;
+  const renderH = MISS_VB.h * scale;
+  const offX = (rect.width - renderW) / 2;
+  const offY = (rect.height - renderH) / 2;
+  const vx = MISS_VB.x + (clientX - rect.left - offX) / scale;
+  const vy = MISS_VB.y + (clientY - rect.top - offY) / scale;
+  return { x: vx, y: vy };
+}
+
+function zoomAt(vx, vy, factor) {
+  const newScale = Math.min(8, Math.max(1, missZoom.scale * factor));
+  const f = newScale / missZoom.scale;
+  // Keep the point (vx,vy) fixed under the transform:
+  //   screen = translate + scale*point  ->  solve new translate.
+  missZoom.tx = vx - (vx - missZoom.tx) * f;
+  missZoom.ty = vy - (vy - missZoom.ty) * f;
+  missZoom.scale = newScale;
+  if (newScale === 1) { missZoom.tx = 0; missZoom.ty = 0; } // snap back to framed
+  applyMissZoom();
+}
+
+function wireMissZoom() {
+  const svg = $("#missPlayfield");
+
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const { x, y } = svgPointFromClient(svg, e.clientX, e.clientY);
+    zoomAt(x, y, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }, { passive: false });
+
+  let dragging = false, lastX = 0, lastY = 0;
+  svg.addEventListener("pointerdown", (e) => {
+    if (missZoom.scale <= 1) return; // nothing to pan when framed
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const rect = svg.getBoundingClientRect();
+    const scale = Math.min(rect.width / MISS_VB.w, rect.height / MISS_VB.h);
+    // Convert pixel delta to viewBox units.
+    missZoom.tx += (e.clientX - lastX) / scale;
+    missZoom.ty += (e.clientY - lastY) / scale;
+    lastX = e.clientX; lastY = e.clientY;
+    applyMissZoom();
+  });
+  const endDrag = (e) => { dragging = false; try { svg.releasePointerCapture(e.pointerId); } catch {} };
+  svg.addEventListener("pointerup", endDrag);
+  svg.addEventListener("pointercancel", endDrag);
+
+  const centre = { x: MISS_VB.x + MISS_VB.w / 2, y: MISS_VB.y + MISS_VB.h / 2 };
+  $("#missZoomIn").addEventListener("click", () => zoomAt(centre.x, centre.y, 1.4));
+  $("#missZoomOut").addEventListener("click", () => zoomAt(centre.x, centre.y, 1 / 1.4));
+  $("#missZoomReset").addEventListener("click", resetMissZoom);
 }
 
 function wireMainTabs() {
@@ -582,9 +663,20 @@ function closeJobsDetail() {
   }
 }
 
-// ---- Miss analyzer: baseplate that reads header metadata via the existing endpoint ----
+// ---- Miss analyzer ----
 
 function wireMissAnalyzer() {
+  // Source tabs (Upload .osr / Score URL).
+  document.querySelectorAll(".miss-src-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const src = btn.dataset.missSrc;
+      document.querySelectorAll(".miss-src-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".miss-src-content").forEach((el) => {
+        el.classList.toggle("hidden", el.dataset.missSrcContent !== src);
+      });
+    });
+  });
+
   const dz = $("#missDropzone");
   const input = $("#missReplayFile");
   dz.addEventListener("click", () => input.click());
@@ -598,28 +690,30 @@ function wireMissAnalyzer() {
   input.addEventListener("change", () => {
     if (input.files[0]) handleMissReplayFile(input.files[0]);
   });
+
+  const urlBtn = $("#missAnalyzeUrlBtn");
+  urlBtn.addEventListener("click", handleMissScoreUrl);
+  $("#missScoreUrl").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleMissScoreUrl();
+  });
 }
 
-async function handleMissReplayFile(file) {
+// Shared result/error handling for both analysis entry points. `doFetch`
+// returns the fetch Response promise; everything else (status text,
+// error parsing, rendering) is identical.
+async function runMissAnalysis(doFetch) {
   const info = $("#missReplayInfo");
   const status = $("#missStatus");
   const results = $("#missResults");
   info.classList.remove("hidden");
-  info.textContent = "Uploading replay...";
-  status.textContent = "";
+  info.textContent = "Analyzing...";
+  status.textContent = "Parsing replay + resolving beatmap (this can take a few seconds on a cold cache)...";
   results.classList.add("hidden");
 
   try {
-    const buf = await file.arrayBuffer();
-    status.textContent = "Parsing replay + resolving beatmap (this can take a few seconds on a cold cache)...";
-    const res = await fetch("/api/miss-analyzer/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: buf,
-    });
+    const res = await doFetch();
     const text = await res.text();
     if (!res.ok) {
-      // Server sends JSON for known-shape errors (wrong mode etc), plain text otherwise.
       try {
         const j = JSON.parse(text);
         throw new Error(j.error || text);
@@ -628,13 +722,38 @@ async function handleMissReplayFile(file) {
         throw new Error(text);
       }
     }
-    const data = JSON.parse(text);
-    renderMissResults(data);
+    renderMissResults(JSON.parse(text));
     status.textContent = "";
   } catch (err) {
     info.textContent = `Couldn't analyze replay: ${err.message}`;
     status.textContent = "";
   }
+}
+
+async function handleMissReplayFile(file) {
+  const buf = await file.arrayBuffer();
+  await runMissAnalysis(() =>
+    fetch("/api/miss-analyzer/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: buf,
+    })
+  );
+}
+
+async function handleMissScoreUrl() {
+  const url = $("#missScoreUrl").value.trim();
+  if (!url) {
+    $("#missStatus").textContent = "Paste a score URL first.";
+    return;
+  }
+  await runMissAnalysis(() =>
+    fetch("/api/miss-analyzer/analyze-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scoreUrl: url }),
+    })
+  );
 }
 
 function renderMissResults(data) {
@@ -755,6 +874,7 @@ function selectMiss(misses, index, stats) {
   $("#missPlayBtn").textContent = "▶ Play";
 
   renderTimingStrip();
+  resetMissZoom();
 
   const scrub = $("#missScrub");
   scrub.min = tMin;

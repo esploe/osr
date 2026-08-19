@@ -6,67 +6,91 @@ import { parseBeatmap } from "../lib/beatmapParser.js";
 import { analyzeMisses } from "../lib/missAnalyzer.js";
 import { findBeatmapFileByHash } from "../lib/beatmapFinder.js";
 import { resolveBeatmapByHash, ensureBeatmapsetDownloaded } from "../lib/beatmapMirror.js";
+import { parseScoreUrl, downloadReplayForScore } from "../lib/osuApi.js";
 import { dirs } from "../lib/paths.js";
 
 export const missAnalyzerRouter = Router();
 
-// One shot: caller sends an .osr, we return everything the UI needs to
-// render the miss list overlay (header meta, misses, beatmap difficulty
-// info). Beatmap gets downloaded on-demand if it isn't already cached
-// under dirs.songs -- same cache the render pipeline uses, so a replay
+// Core: given raw .osr bytes, parse + resolve + analyze and either send
+// the full result JSON or an error JSON/text. Returns nothing (writes to
+// `res` directly) so both the file-upload and score-URL entry points can
+// share it.
+async function analyzeReplayBytes(bytes, res) {
+  const replay = await parseReplayFull(bytes);
+  if (replay.modeByte !== 0) {
+    return res.status(400).json({
+      error: `Miss analyzer only supports osu!standard (mode 0); this replay is ${replay.mode}.`,
+      header: publicHeader(replay),
+    });
+  }
+
+  const resolved = await resolveBeatmapByHash(replay.beatmapHash);
+  const beatmapsetDir = path.join(dirs.songs, String(resolved.beatmapsetId));
+
+  let match = findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash);
+  if (!match) {
+    // Not cached yet -- pull it, same code path the render pipeline uses.
+    await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs);
+    match = findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash);
+  }
+  if (!match) {
+    return res.status(404).json({
+      error: `Beatmap file with MD5 ${replay.beatmapHash} not found inside beatmapset ${resolved.beatmapsetId} after download.`,
+      header: publicHeader(replay),
+    });
+  }
+
+  const beatmap = parseBeatmap(match.content);
+  const { misses, stats, warning } = analyzeMisses({
+    frames: replay.frames,
+    beatmap,
+    mods: replay.mods,
+  });
+
+  res.json({
+    header: publicHeader(replay),
+    beatmap: {
+      artist: beatmap.artist,
+      title: beatmap.title,
+      version: beatmap.version,
+      difficulty: beatmap.difficulty,
+      objectCount: beatmap.hitObjects.length,
+    },
+    resolvedSource: resolved.source,
+    beatmapsetId: resolved.beatmapsetId,
+    misses,
+    stats,
+    warning,
+  });
+}
+
+// Upload path: caller sends raw .osr bytes. Beatmap is downloaded
+// on-demand into the same cache the render pipeline uses, so a replay
 // that's already been rendered analyzes instantly.
 missAnalyzerRouter.post("/analyze", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => {
   try {
     if (!req.body?.length) return res.status(400).send("Empty request body -- expected raw .osr bytes.");
-
-    const replay = await parseReplayFull(req.body);
-    if (replay.modeByte !== 0) {
-      return res.status(400).json({
-        error: `Miss analyzer only supports osu!standard (mode 0); this replay is ${replay.mode}.`,
-        header: publicHeader(replay),
-      });
-    }
-
-    const resolved = await resolveBeatmapByHash(replay.beatmapHash);
-    const beatmapsetDir = path.join(dirs.songs, String(resolved.beatmapsetId));
-
-    let match = findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash);
-    if (!match) {
-      // Not cached yet -- pull it, same code path the render pipeline uses.
-      await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs);
-      match = findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash);
-    }
-    if (!match) {
-      return res.status(404).json({
-        error: `Beatmap file with MD5 ${replay.beatmapHash} not found inside beatmapset ${resolved.beatmapsetId} after download.`,
-        header: publicHeader(replay),
-      });
-    }
-
-    const beatmap = parseBeatmap(match.content);
-    const { misses, stats, warning } = analyzeMisses({
-      frames: replay.frames,
-      beatmap,
-      mods: replay.mods,
-    });
-
-    res.json({
-      header: publicHeader(replay),
-      beatmap: {
-        artist: beatmap.artist,
-        title: beatmap.title,
-        version: beatmap.version,
-        difficulty: beatmap.difficulty,
-        objectCount: beatmap.hitObjects.length,
-      },
-      resolvedSource: resolved.source,
-      beatmapsetId: resolved.beatmapsetId,
-      misses,
-      stats,
-      warning,
-    });
+    await analyzeReplayBytes(req.body, res);
   } catch (err) {
     console.error("miss-analyzer error:", err);
+    res.status(500).send(`Miss analysis failed: ${err.message}`);
+  }
+});
+
+// Score-URL path: fetch the .osr from the osu! API (same download the
+// render pipeline uses), then analyze it. Requires OSU_CLIENT_ID/SECRET
+// and the score itself must have a downloadable replay.
+missAnalyzerRouter.post("/analyze-url", express.json(), async (req, res) => {
+  try {
+    const scoreUrl = req.body?.scoreUrl;
+    if (typeof scoreUrl !== "string" || !scoreUrl.trim()) {
+      return res.status(400).send("Provide a scoreUrl.");
+    }
+    const { scoreId } = parseScoreUrl(scoreUrl.trim());
+    const bytes = await downloadReplayForScore(scoreId);
+    await analyzeReplayBytes(bytes, res);
+  } catch (err) {
+    console.error("miss-analyzer url error:", err);
     res.status(500).send(`Miss analysis failed: ${err.message}`);
   }
 });

@@ -343,10 +343,22 @@ input[type="checkbox"] {
 /* Miss analyzer */
 .miss-layout {
   display: grid;
-  grid-template-columns: minmax(0, 900px);
-  justify-content: center;
+  grid-template-columns: minmax(0, 1fr);
   padding: 20px;
 }
+.miss-src-btn {
+  flex: 1;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.miss-src-btn.active { color: var(--text); border-color: var(--accent-dim); background: #2a2038; }
+.miss-src-content.hidden { display: none; }
+.miss-src-content { margin-bottom: 8px; }
 .miss-panel h2 .pill {
   display: inline-block;
   margin-left: 8px;
@@ -391,8 +403,8 @@ input[type="checkbox"] {
 .miss-summary { margin-bottom: 12px; }
 .miss-detail {
   display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 16px;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
   align-items: start;
 }
 @media (max-width: 900px) {
@@ -411,7 +423,7 @@ input[type="checkbox"] {
   gap: 8px;
 }
 .miss-list-wrap {
-  max-height: 480px;
+  max-height: 78vh;
   overflow-y: auto;
   padding-right: 6px;
 }
@@ -463,12 +475,20 @@ input[type="checkbox"] {
 .miss-item-cat.cat-unknown { color: var(--text-dim); }
 .miss-item-detail { color: var(--text-dim); font-size: 11px; }
 .miss-playfield {
+  display: block;
   width: 100%;
+  max-height: 72vh;
   aspect-ratio: 4 / 3;
+  margin: 0 auto;
   background: #0e0c14;
   border-radius: 8px;
   border: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
 }
+.miss-playfield:active { cursor: grabbing; }
+.miss-zoom-controls { margin-left: auto; display: inline-flex; gap: 4px; }
+.miss-zoom-controls .btn { padding: 2px 9px; font-size: 13px; line-height: 1.2; }
 .miss-player { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .miss-player-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .miss-speed {
