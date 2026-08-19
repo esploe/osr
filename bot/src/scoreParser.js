@@ -47,8 +47,15 @@ function extractBeatmapId(embed) {
 function extractUsername(embed) {
   const raw = embed.author?.name;
   if (!raw) return null;
-  // Strip common trailing decoration, e.g. "Username - Recent #1", "Username | osu!".
-  const cleaned = raw.split(/[-|•·]/)[0].trim();
+  // Score bots decorate the author name with trailing stats/rank -- strip
+  // common separators. Live-observed formats:
+  //   Bathbot: "username: 6,018.48pp (#62,196 EE217)"    (colon)
+  //   owo:     "username | osu!"                         (padded pipe)
+  //   generic: "username - Recent #1"                    (padded dash)
+  // Colon is always safe (never valid in an osu! username); pipe/dash/etc.
+  // require surrounding whitespace so a legit username like "Cook-iezi"
+  // isn't chopped in half.
+  const cleaned = raw.split(/\s*:\s*|\s+[|•·-]\s+/)[0].trim();
   return cleaned || null;
 }
 

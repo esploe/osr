@@ -68,13 +68,23 @@ export async function getUser(username) {
   }
 }
 
+// `key=username` only works on the /users/{user} top-level lookup; the
+// /users/{user}/scores/* and /beatmaps/{b}/scores/users/{user}/all
+// subresource paths require a numeric user ID and 404 with a bare username
+// (this was live-observed as an unhelpful "HTTP 404 {"error":null}" from
+// getUserRecentScoreUrl). Resolve to an id once and reuse it downstream.
+async function resolveUserId(username) {
+  const user = await apiGet(`/users/${encodeURIComponent(username)}?key=username`);
+  if (!user?.id) throw new Error(`No osu! user named "${username}".`);
+  return user.id;
+}
+
 // Every lookup here is pinned to mode=osu: the render pipeline rejects any
 // replay whose header isn't osu!standard (renderPipeline.js), so a hit in
 // another mode would just fail downstream anyway -- no point surfacing it.
 export async function getUserRecentScoreUrl(username) {
-  const scores = await apiGet(
-    `/users/${encodeURIComponent(username)}/scores/recent?mode=osu&include_fails=1&limit=1&key=username`
-  );
+  const userId = await resolveUserId(username);
+  const scores = await apiGet(`/users/${userId}/scores/recent?mode=osu&include_fails=1&limit=1`);
   if (!scores.length) {
     throw new Error(`No recent osu!standard scores found for "${username}".`);
   }
@@ -82,7 +92,8 @@ export async function getUserRecentScoreUrl(username) {
 }
 
 export async function getUserScoreOnBeatmapUrl(username, beatmapId, mods) {
-  const data = await apiGet(`/beatmaps/${beatmapId}/scores/users/${encodeURIComponent(username)}/all?mode=osu`);
+  const userId = await resolveUserId(username);
+  const data = await apiGet(`/beatmaps/${beatmapId}/scores/users/${userId}/all?mode=osu`);
   const scores = data.scores || [];
   if (!scores.length) {
     throw new Error(`Couldn't find an osu!standard score by "${username}" on that beatmap.`);
