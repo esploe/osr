@@ -500,9 +500,56 @@ input[type="checkbox"]:focus-visible {
   gap: 16px;
   padding: 20px;
 }
-/* Compact, detached input card -- not full-bleed across a 1440p screen. */
-.miss-input-panel { max-width: 640px; width: 100%; }
+/* Input card sits beside a legend/reference card, results go full-width
+   below. On narrow screens they stack. */
+.miss-top {
+  display: grid;
+  grid-template-columns: minmax(0, 540px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .miss-top { grid-template-columns: 1fr; }
+}
 .miss-results-panel { animation: fadeUp .25s ease both; }
+
+.miss-legend-panel { align-self: stretch; }
+.legend-block { margin-bottom: 16px; }
+.legend-block h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+  font-weight: 700;
+}
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.legend-list li { display: flex; align-items: center; gap: 8px; line-height: 1.4; }
+.legend-list .miss-item-cat { flex: none; }
+.legend-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.legend-dot.green { background: #6ee7a0; transform: rotate(45deg); border-radius: 3px; }
+.legend-dot.red { background: #ff4d6d; transform: rotate(45deg); border-radius: 3px; }
+.legend-dot.cyan { background: #66d9ff; height: 4px; border-radius: 2px; }
+.legend-dot.white { background: #fff; border-radius: 50%; }
+.legend-dot.ring { background: transparent; border: 1.5px dashed var(--accent); border-radius: 50%; }
+.legend-dot.band-green { background: rgba(110, 231, 160, 0.5); }
+.legend-dot.band-yellow { background: rgba(255, 210, 61, 0.5); }
+.legend-dot.band-orange { background: rgba(255, 138, 61, 0.5); }
 .miss-src-btn {
   flex: 1;
   padding: 8px;
