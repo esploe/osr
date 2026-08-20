@@ -32,10 +32,12 @@ async function init() {
 
 // ---- Miss playfield zoom / pan ----
 // Applies a transform to #missZoomGroup. Coordinates are in the SVG's
-// own viewBox units (-128..640 x, -96..480 y). Wheel zooms toward the
-// pointer; drag pans; the buttons zoom toward the playfield centre.
+// own viewBox units. The frame is the 512x384 playfield plus a small
+// margin so circles render close to true in-game scale (a wide margin
+// would zoom the whole field out and make CS look smaller than it is).
+// Wheel zooms toward the pointer; drag pans; buttons zoom to centre.
 const missZoom = { scale: 1, tx: 0, ty: 0 };
-const MISS_VB = { x: -128, y: -96, w: 768, h: 576 };
+const MISS_VB = { x: -40, y: -30, w: 592, h: 444 };
 
 function applyMissZoom() {
   const g = document.getElementById("missZoomGroup");
@@ -1005,7 +1007,7 @@ function renderMissPlayback() {
   const hw50 = stats.hitWindow50Ms || 150;
 
   const parts = [];
-  parts.push(`<rect x="-128" y="-96" width="768" height="576" fill="#0e0c14" />`);
+  parts.push(`<rect x="-40" y="-30" width="592" height="444" fill="#0e0c14" />`);
   parts.push(`<rect x="0" y="0" width="512" height="384" fill="none" stroke="var(--border)" stroke-width="1" opacity="0.45" />`);
 
   // Objects within the visible window (approach -> shortly after hit).
@@ -1033,7 +1035,10 @@ function renderMissPlayback() {
 
     // Approach ring (4r -> r) while the note is still approaching.
     if (currentT < o.t) {
-      const appR = r + 3 * r * ((o.t - currentT) / preempt);
+      // Approach ring shrinks onto the note. Capped at ~2.6x (vs the
+      // game's ~4x) so edge-of-playfield rings mostly stay inside the
+      // now-tight frame instead of forcing a wide zoomed-out margin.
+      const appR = r + 1.6 * r * ((o.t - currentT) / preempt);
       parts.push(`<circle cx="${o.x}" cy="${o.y}" r="${appR}" fill="none" stroke="${stroke}" stroke-width="1.3" opacity="${op * 0.7}" />`);
     }
     if (missedAndPast) {
