@@ -6,7 +6,7 @@ import { parseBeatmap } from "../lib/beatmapParser.js";
 import { analyzeMisses } from "../lib/missAnalyzer.js";
 import { findBeatmapFileByHash } from "../lib/beatmapFinder.js";
 import { resolveBeatmapByHash, ensureBeatmapsetDownloaded } from "../lib/beatmapMirror.js";
-import { parseScoreUrl, downloadReplayForScore } from "../lib/osuApi.js";
+import { parseScoreUrl, downloadReplayForScore, getScore } from "../lib/osuApi.js";
 import { dirs } from "../lib/paths.js";
 import { Beatmap, Performance } from "rosu-pp-js";
 
@@ -37,6 +37,51 @@ function computePp(content, replay) {
     console.error("pp calc failed:", err.message);
     return null;
   }
+}
+
+// pp for a score from its API hit-counts (no replay needed). The play's
+// current pp uses the *official* value the API returns (the exact lazer pp
+// the user received); the no-miss pp is computed with rosu in lazer mode
+// (every miss recovered as a 300, full combo) so it's consistent with how
+// lazer scores. stars is the map's lazer star rating with these mods.
+function computeSimPp(content, { mods, counts, maxCombo, officialPp }) {
+  try {
+    const map = new Beatmap(content);
+    const cur = new Performance({
+      mods, lazer: true, n300: counts.count300, n100: counts.count100,
+      n50: counts.count50, misses: counts.countMiss, combo: maxCombo,
+    }).calculate(map);
+    const fc = new Performance({
+      mods, lazer: true, n300: counts.count300 + counts.countMiss,
+      n100: counts.count100, n50: counts.count50, misses: 0,
+    }).calculate(map);
+    return {
+      current: officialPp != null ? Math.round(officialPp * 10) / 10 : Math.round(cur.pp * 10) / 10,
+      fc: Math.round(fc.pp * 10) / 10,
+      stars: Math.round(cur.difficulty.stars * 100) / 100,
+    };
+  } catch (err) {
+    console.error("sim pp calc failed:", err.message);
+    return null;
+  }
+}
+
+// Resolve + (if needed) download the .osu file for a beatmap md5, returning
+// its raw content. Shared by the replay and score-URL simulation paths.
+async function loadBeatmapContentByHash(beatmapHash) {
+  const resolved = await resolveBeatmapByHash(beatmapHash);
+  const beatmapsetDir = path.join(dirs.songs, String(resolved.beatmapsetId));
+  let match = findBeatmapFileByHash(beatmapsetDir, beatmapHash);
+  if (!match) {
+    await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs);
+    match = findBeatmapFileByHash(beatmapsetDir, beatmapHash);
+  }
+  if (!match) {
+    throw new Error(
+      `Beatmap file with MD5 ${beatmapHash} not found inside beatmapset ${resolved.beatmapsetId} after download.`
+    );
+  }
+  return { content: match.content, beatmapsetId: resolved.beatmapsetId, source: resolved.source };
 }
 
 // Core: given raw .osr bytes, parse + resolve + analyze and either send
@@ -121,6 +166,82 @@ missAnalyzerRouter.post("/analyze-url", express.json(), async (req, res) => {
   } catch (err) {
     console.error("miss-analyzer url error:", err);
     res.status(500).send(`Miss analysis failed: ${err.message}`);
+  }
+});
+
+// Score-URL simulation path: the "what if you hadn't missed" numbers WITHOUT
+// needing a downloadable replay -- fetches the score's metadata from the
+// osu! API (hit counts, mods, combo, beatmap) and computes pp off the cached
+// .osu file. Works for any score the API exposes, unlike /analyze-url which
+// needs the .osr frames for playfield miss detection.
+missAnalyzerRouter.post("/simulate-url", express.json(), async (req, res) => {
+  try {
+    const scoreUrl = req.body?.scoreUrl;
+    if (typeof scoreUrl !== "string" || !scoreUrl.trim()) {
+      return res.status(400).json({ error: "Provide a scoreUrl." });
+    }
+    const { scoreId } = parseScoreUrl(scoreUrl.trim());
+    const score = await getScore(scoreId);
+
+    // osu!standard only (same constraint the render pipeline enforces).
+    const rulesetId = score.ruleset_id ?? score.mode_int;
+    const isStd = rulesetId === 0 || score.beatmap?.mode === "osu" || score.mode === "osu";
+    if (!isStd) {
+      return res
+        .status(400)
+        .json({ error: "whatif only supports osu!standard scores." });
+    }
+
+    const st = score.statistics || {};
+    // New-API statistics names (great/ok/meh/miss) -> classic 300/100/50/miss.
+    const counts = {
+      count300: st.great || 0,
+      count100: st.ok || 0,
+      count50: st.meh || 0,
+      countMiss: st.miss || 0,
+    };
+    const modAcronyms = (score.mods || [])
+      .map((m) => (typeof m === "string" ? m : m.acronym))
+      .filter(Boolean);
+    // "CL" (classic) is a scoring flag, not a difficulty-affecting mod -- drop
+    // it from the pp mods and the displayed mod string so it doesn't read as
+    // if the player used some extra mod.
+    const ppMods = modAcronyms.filter((m) => m !== "CL");
+
+    const beatmapHash = score.beatmap?.checksum;
+    if (!beatmapHash) {
+      return res.status(422).json({ error: "Score is missing its beatmap checksum; can't resolve the map." });
+    }
+    const { content, beatmapsetId, source } = await loadBeatmapContentByHash(beatmapHash);
+
+    const set = score.beatmapset || {};
+    res.json({
+      header: {
+        playerName: score.user?.username || `user ${score.user_id}`,
+        mode: "osu",
+        modsString: ppMods.join(""),
+        mods: ppMods,
+        counts,
+        maxCombo: score.max_combo,
+        perfectCombo: Boolean(score.is_perfect_combo ?? score.legacy_perfect),
+      },
+      beatmap: {
+        artist: set.artist ?? "",
+        title: set.title ?? "",
+        version: score.beatmap?.version ?? "",
+      },
+      resolvedSource: source,
+      beatmapsetId,
+      pp: computeSimPp(content, {
+        mods: ppMods.join(""),
+        counts,
+        maxCombo: score.max_combo,
+        officialPp: score.pp,
+      }),
+    });
+  } catch (err) {
+    console.error("miss-analyzer simulate error:", err);
+    res.status(500).json({ error: `Simulation failed: ${err.message}` });
   }
 });
 

@@ -87,6 +87,26 @@ export function parseScoreUrl(input) {
 }
 
 /**
+ * Fetches a score's metadata (statistics, mods, combo, beatmap, user) via
+ * the official API. Unlike downloadReplayForScore this works for ANY score,
+ * not just ones with a downloadable replay -- the "what if" simulation only
+ * needs the hit counts + beatmap, never the replay frames.
+ */
+export async function getScore(scoreId) {
+  const token = await getToken();
+  const res = await fetch(`${API_BASE}/scores/${scoreId}`, {
+    headers: { Authorization: `Bearer ${token}`, "x-api-version": "20240130" },
+  });
+  if (res.status === 404) {
+    throw new Error(`Score ${scoreId} not found.`);
+  }
+  if (!res.ok) {
+    throw new Error(`Score lookup failed: HTTP ${res.status} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/**
  * Downloads the .osr for a given score id via the official API.
  *
  * Caveat: the osu! API only serves a replay when the score has
