@@ -1,6 +1,6 @@
 import { EmbedBuilder } from "discord.js";
 import { COLOR_INFO } from "./embeds.js";
-import { getGradeEmoji } from "./gradeEmojis.js";
+import { getGradeEmoji, getHitEmoji } from "./gradeEmojis.js";
 
 // osu!standard accuracy + letter grade from a judgement breakdown. Ported
 // verbatim from web/app.js#computeAccGrade so the embed matches the web
@@ -93,14 +93,16 @@ export function buildWhatifEmbed(data) {
     `*${noMissSub}*`,
   ].filter(Boolean).join("\n");
 
-  // Hit breakdown as its own column, colour-coded with osu's judgement
-  // colours (300 blue, 100 green, 50 gold, miss red) so it reads at a glance
-  // instead of a lonely row of slash-separated numbers.
+  // Hit breakdown as its own column, using osu's default-skin hit-result
+  // graphics (300/100/50/miss) as emoji, with osu-judgement-coloured squares
+  // as a fallback if those application emojis aren't available.
+  const HIT_FALLBACK = { 300: "🟦", 100: "🟩", 50: "🟨", miss: "🟥" };
+  const hitRow = (kind, n) => `${getHitEmoji(String(kind)) || HIT_FALLBACK[kind]} \`${n}\``;
   const hits = [
-    `🟦 \`${c.count300}\``,
-    `🟩 \`${c.count100}\``,
-    `🟨 \`${c.count50}\``,
-    `🟥 \`${c.countMiss}\``,
+    hitRow(300, c.count300),
+    hitRow(100, c.count100),
+    hitRow(50, c.count50),
+    hitRow("miss", c.countMiss),
   ].join("\n");
 
   const modLine = header.modsString ? `\`+${header.modsString}\`` : "`No mod`";
