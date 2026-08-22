@@ -56,10 +56,11 @@ function computeSimPp(content, { mods, counts, maxCombo, officialPp }) {
       mods, lazer: true, n300: counts.count300 + counts.countMiss,
       n100: counts.count100, n50: counts.count50, misses: 0,
     }).calculate(map);
+    const round2 = (x) => Math.round(x * 100) / 100;
     return {
-      current: officialPp != null ? Math.round(officialPp * 10) / 10 : Math.round(cur.pp * 10) / 10,
-      fc: Math.round(fc.pp * 10) / 10,
-      stars: Math.round(cur.difficulty.stars * 100) / 100,
+      current: round2(officialPp != null ? officialPp : cur.pp),
+      fc: round2(fc.pp),
+      stars: round2(cur.difficulty.stars),
     };
   } catch (err) {
     console.error("sim pp calc failed:", err.message);
