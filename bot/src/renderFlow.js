@@ -1,5 +1,6 @@
 import { getProfileSettings, submitRender, getJob } from "./renderClient.js";
 import { getUserPrefs } from "./prefsStore.js";
+import { progressEmbed, successEmbed, errorEmbed } from "./embeds.js";
 
 const POLL_INTERVAL_MS = Number(process.env.BOT_POLL_INTERVAL_MS || 4000);
 const MAX_POLL_MS = 30 * 60 * 1000; // give up rather than poll forever if a job gets stuck
@@ -21,14 +22,16 @@ function buildRenderSettings(profileSettings, prefs) {
 export async function runRenderFlow(triggerMessage, scoreUrl) {
   const userId = triggerMessage.author.id;
   if (activeUsers.has(userId)) {
-    await triggerMessage.reply("You already have a render in progress -- wait for it to finish first.");
+    await triggerMessage.reply({
+      embeds: [errorEmbed("You already have a render in progress -- wait for it to finish first.")],
+    });
     return;
   }
   activeUsers.add(userId);
 
   let statusMessage;
   try {
-    statusMessage = await triggerMessage.reply(`🎬 Queued: ${scoreUrl}`);
+    statusMessage = await triggerMessage.reply({ embeds: [progressEmbed(`🎬 Queued: ${scoreUrl}`)] });
 
     // Precedence for settings sent to the coordinator, lowest to highest:
     // schema defaults (filled in by the coordinator's validateAndMerge if
@@ -46,28 +49,35 @@ export async function runRenderFlow(triggerMessage, scoreUrl) {
       const job = await getJob(jobId);
 
       if (job.status === "done") {
-        await statusMessage.edit(
-          job.shareUrl
-            ? `✅ Done: ${job.shareUrl}`
-            : "✅ Render finished, but no Zipline share link is available " +
-                "(ZIPLINE_URL/ZIPLINE_TOKEN not configured on the server)."
-        );
+        await statusMessage.edit({
+          embeds: [
+            job.shareUrl
+              ? successEmbed(`✅ Done: ${job.shareUrl}`)
+              : successEmbed(
+                  "✅ Render finished, but no Zipline share link is available " +
+                    "(ZIPLINE_URL/ZIPLINE_TOKEN not configured on the server)."
+                ),
+          ],
+        });
         return;
       }
       if (job.status === "error") {
-        await statusMessage.edit(`❌ Render failed: ${job.error || "unknown error"}`);
+        await statusMessage.edit({ embeds: [errorEmbed(`Render failed: ${job.error || "unknown error"}`)] });
         return;
       }
       if (job.stage !== lastStage) {
         lastStage = job.stage;
-        await statusMessage.edit(`⏳ ${job.stage}${job.progress ? ` (${job.progress}%)` : ""}`);
+        await statusMessage.edit({
+          embeds: [progressEmbed(`⏳ ${job.stage}${job.progress ? ` (${job.progress}%)` : ""}`)],
+        });
       }
     }
-    await statusMessage.edit("⌛ Gave up waiting after 30 minutes -- check the web UI for this job's status.");
+    await statusMessage.edit({
+      embeds: [errorEmbed("⌛ Gave up waiting after 30 minutes -- check the web UI for this job's status.")],
+    });
   } catch (err) {
-    const text = `❌ ${err.message}`;
-    if (statusMessage) await statusMessage.edit(text).catch(() => {});
-    else await triggerMessage.reply(text).catch(() => {});
+    if (statusMessage) await statusMessage.edit({ embeds: [errorEmbed(err.message)] }).catch(() => {});
+    else await triggerMessage.reply({ embeds: [errorEmbed(err.message)] }).catch(() => {});
   } finally {
     activeUsers.delete(userId);
   }

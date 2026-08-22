@@ -22,6 +22,29 @@ export async function submitRender(scoreUrl, settings) {
   return jobId;
 }
 
+// Score & no-miss simulation via the coordinator's miss-analyzer, which
+// downloads the .osr itself (same score-URL path as rendering) and returns
+// header/beatmap/pp JSON. On failure the endpoint replies with either a
+// JSON { error } body (400/404) or plain text (500) -- surface whichever.
+export async function analyzeScoreUrl(scoreUrl) {
+  const res = await fetch(`${COORDINATOR_URL}/api/miss-analyzer/analyze-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scoreUrl }),
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // non-JSON body (the 500 path sends plain text)
+  }
+  if (!res.ok) {
+    throw new Error((data && data.error) || text || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 export async function getJob(jobId) {
   const res = await fetch(`${COORDINATOR_URL}/api/render/${jobId}`);
   if (!res.ok) {
