@@ -1,5 +1,6 @@
 import { Router } from "express";
 import express from "express";
+import fs from "node:fs";
 import path from "node:path";
 import { parseReplayFull } from "../lib/osrParser.js";
 import { parseBeatmap } from "../lib/beatmapParser.js";
@@ -71,10 +72,15 @@ function computeSimPp(content, { mods, counts, maxCombo, officialPp }) {
 async function loadBeatmapContentByHash(beatmapHash) {
   const resolved = await resolveBeatmapByHash(beatmapHash);
   const beatmapsetDir = path.join(dirs.songs, String(resolved.beatmapsetId));
-  let match = findBeatmapFileByHash(beatmapsetDir, beatmapHash);
+  // findBeatmapFileByHash walks the dir with readdirSync, which throws if it
+  // doesn't exist yet -- so guard on existence and download first when the
+  // set isn't cached, rather than letting an uncached set surface as ENOENT.
+  const find = () =>
+    fs.existsSync(beatmapsetDir) ? findBeatmapFileByHash(beatmapsetDir, beatmapHash) : null;
+  let match = find();
   if (!match) {
     await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs);
-    match = findBeatmapFileByHash(beatmapsetDir, beatmapHash);
+    match = find();
   }
   if (!match) {
     throw new Error(
