@@ -1,5 +1,6 @@
 import { EmbedBuilder } from "discord.js";
 import { COLOR_INFO } from "./embeds.js";
+import { getGradeEmoji } from "./gradeEmojis.js";
 
 // osu!standard accuracy + letter grade from a judgement breakdown. Ported
 // verbatim from web/app.js#computeAccGrade so the embed matches the web
@@ -20,11 +21,14 @@ function computeAccGrade(n300, n100, n50, n0) {
   return { acc, grade };
 }
 
-// Colour-coded grade "badge" using osu!'s own grade colours, approximated
-// with standard emoji (no custom-emoji upload needed): SS/S gold, A green,
-// B blue, C purple, D red.
+// Grade badge: prefer the real osu! grade icon (uploaded as an application
+// emoji, which already contains the letter) and fall back to an osu-coloured
+// circle + letter if the emoji isn't available (upload failed / not ready).
 const GRADE_CIRCLE = { SS: "🟡", S: "🟡", A: "🟢", B: "🔵", C: "🟣", D: "🔴" };
-const gradeBadge = (g) => `${GRADE_CIRCLE[g] || "⚪"} **${g}**`;
+function gradeBadge(g) {
+  const emoji = getGradeEmoji(g);
+  return emoji || `${GRADE_CIRCLE[g] || "⚪"} **${g}**`;
+}
 
 // osu!'s star-rating difficulty spectrum (star value -> colour). Used to tint
 // the embed's accent bar the same colour the game would give this map's

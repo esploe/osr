@@ -14,6 +14,7 @@ import { isScoreBotAuthor, parseScoreBotEmbed } from "./scoreParser.js";
 import { runRenderFlow } from "./renderFlow.js";
 import { listSkins, simulateScoreUrl } from "./renderClient.js";
 import { buildWhatifEmbed } from "./whatif.js";
+import { ensureGradeEmojis } from "./gradeEmojis.js";
 import { infoEmbed, successEmbed, errorEmbed, progressEmbed, helpEmbed } from "./embeds.js";
 
 // Text-command prefix (e.g. ".render", ".whatif"). Mentioning the bot still
@@ -82,8 +83,11 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-client.once(Events.ClientReady, (c) => {
+client.once(Events.ClientReady, async (c) => {
   console.log(`Discord bot logged in as ${c.user.tag}`);
+  // Upload the osu! grade badges as application emojis (once) so .whatif can
+  // show real grade icons instead of coloured circles.
+  await ensureGradeEmojis(c);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

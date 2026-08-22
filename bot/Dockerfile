@@ -9,6 +9,7 @@ WORKDIR /app
 COPY bot/package.json ./
 RUN npm install --omit=dev
 COPY bot/src ./src
+COPY bot/assets ./assets
 
 ENV BOT_DATA_DIR=/data
 VOLUME /data
