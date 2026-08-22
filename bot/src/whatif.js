@@ -20,9 +20,46 @@ function computeAccGrade(n300, n100, n50, n0) {
   return { acc, grade };
 }
 
-// Turns the coordinator's /api/miss-analyzer/analyze-url JSON into the same
+// Colour-coded grade "badge" using osu!'s own grade colours, approximated
+// with standard emoji (no custom-emoji upload needed): SS/S gold, A green,
+// B blue, C purple, D red.
+const GRADE_CIRCLE = { SS: "🟡", S: "🟡", A: "🟢", B: "🔵", C: "🟣", D: "🔴" };
+const gradeBadge = (g) => `${GRADE_CIRCLE[g] || "⚪"} **${g}**`;
+
+// osu!'s star-rating difficulty spectrum (star value -> colour). Used to tint
+// the embed's accent bar the same colour the game would give this map's
+// difficulty, so harder maps read hotter at a glance.
+const STAR_STOPS = [
+  [0.1, 0x4290fb], [1.25, 0x4fc0ff], [2.0, 0x4fffd5], [2.5, 0x7cff4f],
+  [3.3, 0xf6f05c], [4.2, 0xff8068], [4.9, 0xff4e6f], [5.8, 0xc645b8],
+  [6.7, 0x6563de], [7.7, 0x18158e], [9.0, 0x000000],
+];
+function lerpColor(a, b, t) {
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
+}
+function starColor(stars) {
+  if (stars == null) return COLOR_INFO;
+  if (stars <= STAR_STOPS[0][0]) return STAR_STOPS[0][1];
+  const last = STAR_STOPS[STAR_STOPS.length - 1];
+  if (stars >= last[0]) return last[1];
+  for (let i = 0; i < STAR_STOPS.length - 1; i++) {
+    const [s0, c0] = STAR_STOPS[i];
+    const [s1, c1] = STAR_STOPS[i + 1];
+    if (stars >= s0 && stars <= s1) return lerpColor(c0, c1, (stars - s0) / (s1 - s0));
+  }
+  return COLOR_INFO;
+}
+
+const ppStr = (v) => (v != null ? `**${v.toFixed(2)}**pp` : null);
+
+// Turns the coordinator's /api/miss-analyzer/simulate-url JSON into the same
 // "this play vs. no misses" simulation the web UI renders, as a Discord
-// embed. `data` is the full analyzer response { header, beatmap, pp, ... }.
+// embed. `data` is the full response { header, beatmap, pp, beatmapsetId }.
 export function buildWhatifEmbed(data) {
   const { header, beatmap, pp, beatmapsetId } = data;
   const c = header.counts;
@@ -33,8 +70,8 @@ export function buildWhatifEmbed(data) {
   const noMisses = c.countMiss === 0;
 
   const thisPlay = [
-    `**${cur.grade}** · ${cur.acc.toFixed(2)}%`,
-    pp?.current != null ? `**${pp.current.toFixed(0)}**pp` : null,
+    `${gradeBadge(cur.grade)} · ${cur.acc.toFixed(2)}%`,
+    ppStr(pp?.current),
     `${header.maxCombo}× combo`,
   ].filter(Boolean).join("\n");
 
@@ -44,11 +81,11 @@ export function buildWhatifEmbed(data) {
     ? "already no misses"
     : [
         accDelta >= 0.005 ? `+${accDelta.toFixed(2)}%` : "same acc",
-        ppDelta != null && ppDelta >= 0.5 ? `+${ppDelta.toFixed(0)}pp` : "",
+        ppDelta != null && ppDelta >= 0.01 ? `+${ppDelta.toFixed(2)}pp` : "",
       ].filter(Boolean).join(" · ");
   const noMiss = [
-    `**${sim.grade}** · ${sim.acc.toFixed(2)}%`,
-    pp?.fc != null ? `**${pp.fc.toFixed(0)}**pp` : null,
+    `${gradeBadge(sim.grade)} · ${sim.acc.toFixed(2)}%`,
+    ppStr(pp?.fc),
     `*${noMissSub}*`,
   ].filter(Boolean).join("\n");
 
@@ -57,10 +94,10 @@ export function buildWhatifEmbed(data) {
   const hits = `**${c.count300}** / **${c.count100}** / **${c.count50}** / **${c.countMiss}**`;
 
   const modLine = header.modsString ? `\`+${header.modsString}\`` : "`No mod`";
-  const starLine = pp?.stars != null ? `★ ${pp.stars.toFixed(2)}` : null;
+  const starLine = pp?.stars != null ? `⭐ **${pp.stars.toFixed(2)}**` : null;
 
   const embed = new EmbedBuilder()
-    .setColor(COLOR_INFO)
+    .setColor(starColor(pp?.stars))
     .setAuthor({ name: header.playerName })
     .setTitle(`${beatmap.artist} - ${beatmap.title} [${beatmap.version}]`)
     .setDescription([modLine, starLine].filter(Boolean).join("  ·  "))
