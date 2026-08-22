@@ -93,9 +93,15 @@ export function buildWhatifEmbed(data) {
     `*${noMissSub}*`,
   ].filter(Boolean).join("\n");
 
-  // Unambiguous hit breakdown: the field name labels the slash order so the
-  // values are just the four numbers (osu players read "300/100/50/miss").
-  const hits = `**${c.count300}** / **${c.count100}** / **${c.count50}** / **${c.countMiss}**`;
+  // Hit breakdown as its own column, colour-coded with osu's judgement
+  // colours (300 blue, 100 green, 50 gold, miss red) so it reads at a glance
+  // instead of a lonely row of slash-separated numbers.
+  const hits = [
+    `🟦 \`${c.count300}\``,
+    `🟩 \`${c.count100}\``,
+    `🟨 \`${c.count50}\``,
+    `🟥 \`${c.countMiss}\``,
+  ].join("\n");
 
   const modLine = header.modsString ? `\`+${header.modsString}\`` : "`No mod`";
   const starLine = pp?.stars != null ? `⭐ **${pp.stars.toFixed(2)}**` : null;
@@ -108,7 +114,7 @@ export function buildWhatifEmbed(data) {
     .addFields(
       { name: "This play", value: thisPlay, inline: true },
       { name: "If no misses", value: noMiss, inline: true },
-      { name: "Hits · 300 / 100 / 50 / miss", value: hits, inline: false }
+      { name: "Hits", value: hits, inline: true }
     )
     .setFooter({
       text: noMisses
