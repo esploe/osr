@@ -22,12 +22,13 @@ export async function submitRender(scoreUrl, settings) {
   return jobId;
 }
 
-// Score & no-miss simulation via the coordinator's miss-analyzer, which
-// downloads the .osr itself (same score-URL path as rendering) and returns
-// header/beatmap/pp JSON. On failure the endpoint replies with either a
-// JSON { error } body (400/404) or plain text (500) -- surface whichever.
-export async function analyzeScoreUrl(scoreUrl) {
-  const res = await fetch(`${COORDINATOR_URL}/api/miss-analyzer/analyze-url`, {
+// Score & no-miss simulation via the coordinator's miss-analyzer. Uses the
+// replay-free /simulate-url endpoint: it pulls the score's hit counts + pp
+// straight from the osu! API, so it works for any score, not just ones with
+// a downloadable .osr. Returns header/beatmap/pp JSON; on failure the
+// endpoint replies with a JSON { error } body -- surface its message.
+export async function simulateScoreUrl(scoreUrl) {
+  const res = await fetch(`${COORDINATOR_URL}/api/miss-analyzer/simulate-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ scoreUrl }),

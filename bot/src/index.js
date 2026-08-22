@@ -12,7 +12,7 @@ import { getUserPrefs, setUserPref, clearUserPrefs } from "./prefsStore.js";
 import { getUser, getUserRecentScoreUrl, getUserScoreOnBeatmapUrl } from "./osuApi.js";
 import { isScoreBotAuthor, parseScoreBotEmbed } from "./scoreParser.js";
 import { runRenderFlow } from "./renderFlow.js";
-import { listSkins, analyzeScoreUrl } from "./renderClient.js";
+import { listSkins, simulateScoreUrl } from "./renderClient.js";
 import { buildWhatifEmbed } from "./whatif.js";
 import { infoEmbed, successEmbed, errorEmbed, progressEmbed, helpEmbed } from "./embeds.js";
 
@@ -249,7 +249,7 @@ async function resolveScoreUrl(message, args) {
 
 async function runWhatifFlow(message, scoreUrl) {
   const status = await message.reply({ embeds: [progressEmbed(`🔍 Analyzing: ${scoreUrl}`)] });
-  const data = await analyzeScoreUrl(scoreUrl);
+  const data = await simulateScoreUrl(scoreUrl);
   await status.edit({ embeds: [buildWhatifEmbed(data)] });
 }
 
