@@ -8,6 +8,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 export function findBeatmapFileByHash(beatmapsetDir, targetHash) {
+  if (!fs.existsSync(beatmapsetDir)) return null;
   const wanted = targetHash.toLowerCase();
   for (const entry of walk(beatmapsetDir)) {
     if (!entry.toLowerCase().endsWith(".osu")) continue;
