@@ -459,7 +459,7 @@ async function startRender() {
   $("#jobActive").classList.remove("hidden");
   $("#jobResult").classList.add("hidden");
   $("#shareRow").classList.add("hidden");
-  $("#jobLog").textContent = "";
+  resetLog($("#jobLog"));
   $("#progressFill").style.width = "0%";
   $("#jobStage").textContent = "submitting";
   updateEta(null);
@@ -526,10 +526,54 @@ function updateEta(eta, speed) {
   }
 }
 
+// Log rendering used to freeze the tab: every SSE line did
+// `el.textContent += line` followed by `scrollTop = scrollHeight`, which
+// forces a synchronous reflow *per line*, on an element that grew without
+// bound. danser (-preciseprogress) emits a lot of lines during a render, and
+// the /events SSE replays the whole history at once on connect -- so both a
+// long render and simply opening an existing job would lock up the page.
+//
+// Instead: keep a capped in-memory ring per log element and flush it to the
+// DOM at most once per animation frame (one textContent write + one reflow),
+// no matter how many lines arrived in between. This collapses the bulk replay
+// into a single write and bounds the live log.
+const LOG_MAX_LINES = 2000;
+const _logSinks = new WeakMap();
+
+function _logSink(el) {
+  let sink = _logSinks.get(el);
+  if (!sink) {
+    sink = { lines: [], pending: false };
+    _logSinks.set(el, sink);
+  }
+  return sink;
+}
+
+function pushLog(el, line) {
+  const sink = _logSink(el);
+  sink.lines.push(line);
+  if (sink.lines.length > LOG_MAX_LINES) {
+    sink.lines.splice(0, sink.lines.length - LOG_MAX_LINES);
+  }
+  if (!sink.pending) {
+    sink.pending = true;
+    requestAnimationFrame(() => {
+      sink.pending = false;
+      el.textContent = sink.lines.join("\n") + "\n";
+      el.scrollTop = el.scrollHeight;
+    });
+  }
+}
+
+function resetLog(el) {
+  const sink = _logSink(el);
+  sink.lines = [];
+  sink.pending = false;
+  el.textContent = "";
+}
+
 function appendLog(line) {
-  const el = $("#jobLog");
-  el.textContent += line + "\n";
-  el.scrollTop = el.scrollHeight;
+  pushLog($("#jobLog"), line);
 }
 
 function showShareLink(url) {
@@ -621,7 +665,7 @@ function selectJob(jobId) {
   $("#jobsDetailTitle").textContent = `Job ${jobId}`;
   $("#jobsDetailStage").textContent = "connecting...";
   $("#jobsDetailProgressFill").style.width = "0%";
-  $("#jobsDetailLog").textContent = "";
+  resetLog($("#jobsDetailLog"));
   $("#jobsDetailResult").classList.add("hidden");
   $("#jobsDetailShareRow").classList.add("hidden");
   $("#jobsDetailEta").classList.add("hidden");
@@ -630,9 +674,7 @@ function selectJob(jobId) {
   state.jobsDetail.es = es;
 
   es.addEventListener("log", (e) => {
-    const el = $("#jobsDetailLog");
-    el.textContent += JSON.parse(e.data).line + "\n";
-    el.scrollTop = el.scrollHeight;
+    pushLog($("#jobsDetailLog"), JSON.parse(e.data).line);
   });
   es.addEventListener("stage", (e) => {
     const { stage, progress, eta, speed } = JSON.parse(e.data);
