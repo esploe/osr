@@ -125,7 +125,12 @@ export async function renderReplayToVideo({ job, replayPath, settings }) {
     `-out=${job.id}`,
     `-settings=${settingsName}`,
     "-noupdatecheck",
-    "-nodbcheck",
+    // No -nodbcheck: with it danser only imports *new* song folders, so a
+    // set refreshed in place (beatmapMirror.js re-downloads a cached set
+    // that predates an update of the replay's difficulty) would keep its
+    // stale database entry and still fail with "Beatmap not found". The full
+    // check only re-reads .osu files whose mtime changed, which is cheap at
+    // this library size.
     "-preciseprogress",
   ];
   if (settings.skipIntro) args.push("-quickstart");

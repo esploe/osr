@@ -80,7 +80,12 @@ async function loadBeatmapContentByHash(beatmapHash) {
     fs.existsSync(beatmapsetDir) ? findBeatmapFileByHash(beatmapsetDir, beatmapHash) : null;
   let match = find();
   if (!match) {
-    await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs);
+    // Passing the hash makes a stale cached set (one predating an update of
+    // this difficulty) get refreshed instead of skipped as "already cached".
+    await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs, {
+      beatmapHash,
+      beatmapId: resolved.beatmapId,
+    });
     match = find();
   }
   if (!match) {
@@ -107,11 +112,19 @@ async function analyzeReplayBytes(bytes, res) {
   const resolved = await resolveBeatmapByHash(replay.beatmapHash);
   const beatmapsetDir = path.join(dirs.songs, String(resolved.beatmapsetId));
 
-  let match = findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash);
+  // Same existence guard as loadBeatmapContentByHash: findBeatmapFileByHash
+  // throws ENOENT on a set that isn't cached yet.
+  const find = () =>
+    fs.existsSync(beatmapsetDir) ? findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash) : null;
+  let match = find();
   if (!match) {
-    // Not cached yet -- pull it, same code path the render pipeline uses.
-    await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs);
-    match = findBeatmapFileByHash(beatmapsetDir, replay.beatmapHash);
+    // Not cached yet, or cached but stale -- pull it, same code path the
+    // render pipeline uses.
+    await ensureBeatmapsetDownloaded(resolved.beatmapsetId, dirs.songs, {
+      beatmapHash: replay.beatmapHash,
+      beatmapId: resolved.beatmapId,
+    });
+    match = find();
   }
   if (!match) {
     return res.status(404).json({

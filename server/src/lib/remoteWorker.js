@@ -7,13 +7,13 @@
 
 const RESULT_TIMEOUT_MS = Number(process.env.WORKER_JOB_TIMEOUT_MS || 20 * 60 * 1000);
 
-// jobId -> { job, replayPath, beatmapsetId, settings, dispatched, resolve, reject, timeout }
+// jobId -> { job, replayPath, beatmapsetId, beatmapHash, settings, dispatched, resolve, reject, timeout }
 const entries = new Map();
 const readyQueue = []; // jobIds waiting to be claimed
 
-export function markReadyForWorker(job, { replayPath, beatmapsetId, settings }) {
+export function markReadyForWorker(job, { replayPath, beatmapsetId, beatmapHash, settings }) {
   return new Promise((resolve, reject) => {
-    entries.set(job.id, { job, replayPath, beatmapsetId, settings, dispatched: false, resolve, reject, timeout: null });
+    entries.set(job.id, { job, replayPath, beatmapsetId, beatmapHash, settings, dispatched: false, resolve, reject, timeout: null });
     readyQueue.push(job.id);
     job.setStage("waiting for a render worker", 25);
   });
@@ -32,7 +32,15 @@ export function claimNext() {
       failJob(jobId, `No result from worker within ${Math.round(RESULT_TIMEOUT_MS / 60000)} minutes.`);
     }, RESULT_TIMEOUT_MS);
 
-    return { jobId, replayFilename: `${jobId}.osr`, beatmapsetId: entry.beatmapsetId, settings: entry.settings };
+    return {
+      jobId,
+      replayFilename: `${jobId}.osr`,
+      beatmapsetId: entry.beatmapsetId,
+      // Lets the worker tell a stale cached copy of the set (one predating
+      // an update of this difficulty) from a usable one -- see worker.js.
+      beatmapHash: entry.beatmapHash,
+      settings: entry.settings,
+    };
   }
   return null;
 }

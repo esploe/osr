@@ -53,6 +53,8 @@ export async function runRenderJob(job) {
   job.setStage("downloading beatmap", 15);
   await ensureBeatmapsetDownloaded(beatmapInfo.beatmapsetId, dirs.songs, {
     log: (l) => job.log(l),
+    beatmapHash: meta.beatmapHash,
+    beatmapId: beatmapInfo.beatmapId,
   });
 
   const settings = validateAndMerge(JSON.parse(rawSettings || "{}"));
@@ -62,7 +64,12 @@ export async function runRenderJob(job) {
     // Everything up to here (replay parsing, beatmap resolution/download)
     // already ran locally on the coordinator -- a worker only needs the
     // replay bytes, the resolved beatmapset id, and the settings object.
-    await markReadyForWorker(job, { replayPath, beatmapsetId: beatmapInfo.beatmapsetId, settings });
+    await markReadyForWorker(job, {
+      replayPath,
+      beatmapsetId: beatmapInfo.beatmapsetId,
+      beatmapHash: meta.beatmapHash,
+      settings,
+    });
   } else {
     job.setStage("rendering", 25);
     await renderReplayToVideo({ job, replayPath, settings });

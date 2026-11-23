@@ -7,6 +7,7 @@ import { EventEmitter } from "node:events";
 import { dirs } from "./lib/paths.js";
 import { renderReplayToVideo, ensureBaseSettings } from "./lib/danser.js";
 import { skinFolderName } from "./lib/danserSettings.js";
+import { setHasHash } from "./lib/beatmapMirror.js";
 
 // See index.js for why -- same fetch()-on-IPv6-only-routes gap applies to
 // the worker's own calls back to the coordinator.
@@ -125,7 +126,7 @@ async function downloadAndExtractZip(url, destDir) {
 }
 
 async function processJob(claimed) {
-  const { jobId, beatmapsetId, settings } = claimed;
+  const { jobId, beatmapsetId, beatmapHash, settings } = claimed;
   const job = new RemoteJob(jobId);
   job.log(`Claimed job from coordinator.`);
 
@@ -134,7 +135,20 @@ async function processJob(claimed) {
     await downloadTo(api(`/jobs/${jobId}/replay`), replayPath);
 
     const beatmapDir = path.join(dirs.songs, String(beatmapsetId));
+    // A set cached here by an earlier job can predate an update of the
+    // difficulty this replay was played on -- danser matches by exact MD5
+    // and would just print "Beatmap not found". The coordinator has already
+    // made sure its own copy holds the right hash, so drop a stale local copy
+    // and re-fetch. (beatmapHash is absent from an older coordinator's claim;
+    // skip the check then rather than re-downloading every time.)
+    if (beatmapHash && fs.existsSync(beatmapDir) && !setHasHash(beatmapDir, beatmapHash)) {
+      job.log(`Cached beatmapset ${beatmapsetId} is stale (no difficulty with hash ${beatmapHash}) -- re-fetching from coordinator.`);
+      fs.rmSync(beatmapDir, { recursive: true, force: true });
+    }
     await downloadAndExtractZip(api(`/jobs/${jobId}/beatmap.zip`), beatmapDir);
+    if (beatmapHash && !setHasHash(beatmapDir, beatmapHash)) {
+      throw new Error(`Beatmapset ${beatmapsetId} from the coordinator has no difficulty with hash ${beatmapHash} -- danser would report "Beatmap not found".`);
+    }
 
     const skinName = skinFolderName(settings.skinName);
     if (skinName !== "default") {
