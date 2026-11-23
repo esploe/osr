@@ -28,11 +28,50 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# Override with --build-arg DANSER_REF=<tag/commit> to pin a specific
-# danser-go version instead of tracking master.
-ARG DANSER_REF=master
-RUN git clone --depth 1 --branch ${DANSER_REF} https://github.com/Wieku/danser-go.git . \
-    || (git clone https://github.com/Wieku/danser-go.git . && git checkout ${DANSER_REF})
+# Pinned to the exact danser-go commit the split-encode patch below was
+# generated against -- the patch is applied with `git apply` right after
+# this clone, so building against a moved `master` would make it fail to
+# apply and break the build. Override with --build-arg DANSER_REF=<tag/commit>
+# only together with a patch regenerated against that ref.
+ARG DANSER_REF=8331b0ffb841cc9e0f5e6b756bcf2bba2a9465c0
+RUN git clone https://github.com/Wieku/danser-go.git . && git checkout ${DANSER_REF}
+
+# EXPERIMENTAL (rendering-speed investigation, see CLAUDE.md Session 12):
+# split-encode patch. The timing-probe instrumentation that led here
+# (mainLoopRecord's per-frame closure is ~65% dominated by MakeFrame()'s
+# freePBOPool wait, which traces to ffmpeg's own CPU-bound x264 encode
+# saturating the worker's 4 cores -- not anything in danser's
+# render/readback path) has been removed now that its job is done; see
+# docker/patches/split-encode.patch and CLAUDE.md for the full diagnosis.
+# This patch adds Recording.SplitEncode/SplitEncoderName/
+# SplitEncoderCustomOptions/SplitEncoderFilters/SplitRatio: when enabled,
+# danser renders each frame once then routes contiguous ~5s chunks
+# round-robin between the primary (e.g. CPU libx264) and a second,
+# concurrently-running ffmpeg encoder (e.g. GPU VAAPI), each chunk its own
+# file, concatenated in order before the existing audio mux -- letting two
+# mostly-independent hardware resources encode at once instead of one
+# sitting idle. Measured ~17% faster at 1080p60 (see Session 12), gated on
+# SPLIT_ENCODE_EXPERIMENT in lib/danserSettings.js so the default build is
+# stock danser. Generated against danser-go commit
+# 8331b0ffb841cc9e0f5e6b756bcf2bba2a9465c0 -- if DANSER_REF drifts past this
+# and the patch stops applying cleanly, pin DANSER_REF to that commit (or
+# regenerate the patch) rather than debugging a stale diff.
+COPY docker/patches/split-encode.patch /tmp/split-encode.patch
+RUN git apply /tmp/split-encode.patch
+
+# Rendering-speed investigation (see CLAUDE.md, Session 5): danser's own
+# mainLoopRecord() (app/app.go) processes every frame through one blocking
+# closure -- game update, draw calls, and MakeFrame()'s readback kickoff --
+# with no thread preparing frame N+1 while frame N drains. The author's own
+# comment on checkData() (app/ffmpeg/video.go) says they tried moving this
+# to another goroutine and hit real OpenGL context-affinity problems, so
+# this isn't a naive oversight to "just fix". MakeFrame() only blocks
+# (gl.ClientWaitSync) when the free-PBO pool (MaxVideoBuffers = 10) is
+# fully exhausted -- tried widening it to 60 on the theory that this
+# backpressure valve was the dominant stall; measured *worse* (608s vs the
+# 537s stock baseline, near-identical GPU busy%), so that theory doesn't
+# hold and the patch was reverted. Left as a comment, not a live change,
+# so the next session doesn't have to re-derive or re-test this.
 
 # Matches the repo's own documented build path (README "Building and
 # running the project"): a plain `go build` from the repo root, which

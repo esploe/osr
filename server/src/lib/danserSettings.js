@@ -113,6 +113,37 @@ export function buildJobSettings(base, { songsDir, skinsDir, replaysDir, outputD
     videoEnc.Preset = settings.encodePreset;
   }
 
+  // EXPERIMENTAL split-encode (see CLAUDE.md Session 12 for the full
+  // diagnosis + measurements, and docker/patches/split-encode.patch for the
+  // danser-side implementation): env-gated (SPLIT_ENCODE_EXPERIMENT=1),
+  // not yet a real settings-schema option. danser's patched pipeline renders
+  // each frame once, then routes contiguous ~5s chunks round-robin between a
+  // CPU (libx264, the primary encoder above) and a GPU (VAAPI) ffmpeg process
+  // running concurrently, so both mostly-idle-relative-to-each-other hardware
+  // resources encode at once. Measured ~17% faster at 1080p60 (74s -> 62s on
+  // the RX 570 worker) with objectively transparent quality (SSIM 0.9982 vs
+  // a pure-CPU render), at the cost of a ~30% larger file (VAAPI -qp bitrate)
+  // and ~2.8GB VRAM of frame buffering. Only usable when the primary encoder
+  // is a CPU one (libx264/libx265), matching the case this was validated
+  // against; not worth guarding every combination until this either ships for
+  // real or gets reverted.
+  if (process.env.SPLIT_ENCODE_EXPERIMENT === "1" && settings.videoCodec !== "h264_vaapi") {
+    cfg.Recording.PixelFormat = "nv12"; // shared by both encoders, see video.go
+    cfg.Recording.SplitEncode = true;
+    cfg.Recording.SplitEncoderName = "h264_vaapi";
+    const vaapiDevice = process.env.VAAPI_DEVICE || "/dev/dri/renderD128";
+    cfg.Recording.SplitEncoderCustomOptions = `-vaapi_device ${vaapiDevice} -qp ${Number(settings.crf)}`;
+    // h264_vaapi needs frames uploaded to a hardware surface first -- the
+    // primary encoder (a CPU one, per the guard above) must NOT get this,
+    // so it's set on SplitEncoderFilters, not the shared Recording.Filters.
+    cfg.Recording.SplitEncoderFilters = "hwupload";
+    // Fraction of chunks kept on the CPU lane. 0.6 (40% to the GPU) was the
+    // measured optimum on the RX 570 worker at 1080p60 -- 0.73 (the naive
+    // throughput-ratio guess) left the GPU underused; 0.5 started making the
+    // GPU the bottleneck. See CLAUDE.md Session 12's ratio sweep.
+    cfg.Recording.SplitRatio = Number(process.env.SPLIT_ENCODE_RATIO || "0.6");
+  }
+
   cfg.Recording.AudioCodec = settings.audioCodec;
   const audioEnc = cfg.Recording[settings.audioCodec];
   if (settings.audioCodec === "aac") {

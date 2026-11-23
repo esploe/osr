@@ -1,0 +1,814 @@
+diff --git a/app/app.go b/app/app.go
+index ae5f882..269f020 100644
+--- a/app/app.go
++++ b/app/app.go
+@@ -633,6 +633,15 @@ func mainLoopRecord() {
+ 		fbo = buffer.NewFrameMultisampleScreen(w, h, false, 0)
+ 	})
+ 
++	// osr split-encode patch: p (and p.RunningTime) is needed before
++	// StartFFmpeg so it can compute where to place the encoder cutover.
++	// Moved up from just after StartFFmpeg -- p.RunningTime is already
++	// final by this point (states.NewPlayer ran long before mainLoopRecord
++	// was even called), same value the progress-percent math below reads.
++	p, _ := player.(*states.Player)
++
++	ffmpeg.SetTotalFrameEstimate(int64(p.RunningTime / 1000.0 * float64(settings.Recording.FPS)))
++
+ 	ffmpeg.StartFFmpeg(int(fps), w, h, audioFPS, output)
+ 
+ 	updateFPS := max(fps, 1000)
+@@ -643,8 +652,6 @@ func mainLoopRecord() {
+ 	deltaSumF := fpsDelta
+ 	deltaSumA := 0.0
+ 
+-	p, _ := player.(*states.Player)
+-
+ 	lastCount := int64(0)
+ 	lastRealTime := qpc.GetMilliTimeF()
+ 
+diff --git a/app/ffmpeg/ffmpeg.go b/app/ffmpeg/ffmpeg.go
+index 0e4c8ae..f1f7638 100644
+--- a/app/ffmpeg/ffmpeg.go
++++ b/app/ffmpeg/ffmpeg.go
+@@ -103,9 +103,63 @@ func StopFFmpeg() {
+ 
+ 	log.Println("Ffmpeg finished.")
+ 
++	concatSplitVideo()
+ 	combine()
+ }
+ 
++// osr split-encode patch: when split-encode ran, each chunk wrote its own
++// self-contained file (chunk_0000.<ext>, chunk_0001.<ext>, ...) alternating
++// between the two encoder lanes instead of the single video.<ext> combine()
++// below expects. Concatenate them in index order via the concat demuxer +
++// stream copy (no re-encode -- validated live that x264 and VAAPI segments
++// of the same resolution/fps/pixel format concatenate and decode cleanly)
++// into video.<ext> so combine() needs no further changes. No-op when
++// split-encode wasn't used. splitChunks is populated in index order by
++// newChunk (chunk 0 first), so ranging it yields the correct global order.
++func concatSplitVideo() {
++	if !splitActive || len(splitChunks) == 0 {
++		return
++	}
++
++	tempDir := filepath.Join(settings.Recording.GetOutputDir(), output+"_temp")
++
++	listPath := filepath.Join(tempDir, "concat_list.txt")
++	var sb strings.Builder
++	for _, c := range splitChunks {
++		// concat demuxer resolves relative paths against the list file's own
++		// directory, so the bare filename (same dir) is correct here.
++		sb.WriteString(fmt.Sprintf("file '%s'\n", c.outputName))
++	}
++
++	if err := os.WriteFile(listPath, []byte(sb.String()), 0644); err != nil {
++		panic(fmt.Sprintf("split-encode: failed to write concat list: %s", err))
++	}
++
++	options := []string{
++		"-y",
++		"-f", "concat",
++		"-safe", "0",
++		"-i", listPath,
++		"-c", "copy",
++		filepath.Join(tempDir, "video."+settings.Recording.Container),
++	}
++
++	log.Println(fmt.Sprintf("split-encode: concatenating %d chunk segments...", len(splitChunks)))
++
++	cmd := exec.Command(ffmpegExec, options...)
++
++	if settings.Recording.ShowFFmpegLogs {
++		cmd.Stdout = os.Stdout
++		cmd.Stderr = os.Stderr
++	}
++
++	if err := cmd.Run(); err != nil {
++		panic(fmt.Sprintf("split-encode: failed to concatenate %d chunk segments: %s", len(splitChunks), err))
++	}
++
++	log.Println("split-encode: segments concatenated successfully.")
++}
++
+ func combine() {
+ 	options := []string{
+ 		"-y",
+diff --git a/app/ffmpeg/video.go b/app/ffmpeg/video.go
+index 76376c5..fd0a8ee 100644
+--- a/app/ffmpeg/video.go
++++ b/app/ffmpeg/video.go
+@@ -25,6 +25,21 @@ import (
+ 
+ const MaxVideoBuffers = 10
+ 
++// osr split-encode patch tunables. See the design writeup in
++// docker/patches/split-encode.patch's Dockerfile comment / CLAUDE.md.
++//
++// The core problem the timing probe found: danser's single GL thread can
++// only hand frames to one encoder at a time and blocks on a shallow
++// (MaxVideoBuffers=10) PBO pool, so a single cutover between two encoders
++// runs them near-sequentially (measured 1.44x, worse than CPU-only 1.82x).
++// This design instead routes short *contiguous* chunks round-robin between
++// two encoder lanes, each chunk a self-contained ffmpeg process writing its
++// own file (trivial in-order concat afterward). A deep PBO pool lets danser
++// render a whole chunk ahead into one lane and move to the next while the
++// first lane's ffmpeg still drains -- that background drain is the overlap.
++const splitChunkFrames = 300 // ~5s at 60fps: small enough for fine overlap, big enough that per-chunk ffmpeg spawn (~200ms) is amortized to a few %
++const splitMaxInFlight = 3    // concurrently-draining chunks allowed before danser is throttled. Session 12 tuning: raising this to 5 did NOT help (64s vs 62s) -- the wall is 4-core CPU saturation, not buffer backpressure (per-process CPU sampling showed danser + multiple concurrent x264 chunks + the VAAPI lane's ffmpeg feed saturate all 4 cores at ~330-380%), and more in-flight chunks just add process/context-switch overhead. Bounds VRAM: <= splitMaxInFlight*splitChunkFrames PBOs (~2.8GB at 1080p NV12).
++
+ var cmdVideo *exec.Cmd
+ 
+ var videoPipe io.WriteCloser
+@@ -47,6 +62,65 @@ var limiter *frame.Limiter
+ 
+ var parsedFormat pixconv.PixFmt
+ 
++var rgbToYuvConverter *effects.RGBYUV
++
++// ---- osr split-encode state -------------------------------------------------
++
++// splitActive gates every split-specific branch. When false, this file
++// behaves exactly like stock danser (single persistent encoder via the
++// videoPipe/videoWriteQueue globals above).
++var splitActive bool
++
++// totalFrameEstimate lets startVideo know how many chunks to expect and,
++// more importantly, lets the final (partial) chunk be handled correctly.
++// Set by app.go before StartFFmpeg. -1 = unknown -> split won't engage.
++var totalFrameEstimate int64 = -1
++
++// encodedFrameNumber counts frames actually emitted to an encoder (after
++// motion-blur oversampling has dropped the frames it skips), which is what
++// chunk boundaries are computed against.
++var encodedFrameNumber = int64(-1)
++
++// A chunk is one contiguous run of frames encoded by a single, dedicated
++// ffmpeg process into its own file. Chunks are concatenated in index order
++// at the end.
++type chunk struct {
++	index       int
++	cmd         *exec.Cmd
++	pipe        io.WriteCloser
++	writeQueue  chan *PBO
++	outputName  string
++	encoderName string
++
++	errorMsg  string
++	errorWait *sync.WaitGroup
++}
++
++var (
++	splitInputPixFmt string
++	splitFps         int
++
++	primaryEncoderName string
++	primaryEncOptions  []string
++	primaryFilters     []string
++
++	secondEncoderName string
++	secondEncOptions  []string
++	secondFilters     []string
++
++	splitRatioPrimary float64 // fraction of chunks routed to the primary (CPU) lane
++
++	currentChunk  *chunk
++	splitLastOwner *chunk // checkData: detects chunk transitions to close the finished chunk's queue
++	splitChunks   []*chunk
++	splitInFlight chan struct{}   // capacity splitMaxInFlight -- backpressure/throttle
++	splitWG       *sync.WaitGroup // all chunk writer goroutines
++)
++
++func SetTotalFrameEstimate(n int64) {
++	totalFrameEstimate = n
++}
++
+ type PBO struct {
+ 	handle     uint32
+ 	memPointer unsafe.Pointer
+@@ -54,6 +128,8 @@ type PBO struct {
+ 
+ 	convFormat pixconv.PixFmt
+ 
++	owner *chunk // split mode only: which chunk this frame belongs to
++
+ 	sync uintptr
+ }
+ 
+@@ -77,69 +153,45 @@ func createPBO(format pixconv.PixFmt) *PBO {
+ 	return pbo
+ }
+ 
+-var rgbToYuvConverter *effects.RGBYUV
+-
+-func startVideo(fps, _w, _h int) {
+-	w, h = _w, _h
+-
+-	if settings.Recording.MotionBlur.Enabled {
+-		fps /= settings.Recording.MotionBlur.OversampleMultiplier
+-	}
+-
+-	encoder := strings.ToLower(settings.Recording.Encoder)
+-	outputFormat := strings.ToLower(settings.Recording.PixelFormat)
+-
+-	if strings.HasSuffix(encoder, "_qsv") { // qsv works best with nv12 format
+-		outputFormat = "nv12"
+-	} else if encoder == "libsvtav1" {
+-		outputFormat = "yuv420p"
+-	}
+-
+-	parsedFormat = pixconv.ARGB
++// buildOutputArgs assembles the encoder-specific tail of an ffmpeg command
++// (everything after "-i <pipe>"), shared by the stock single-encoder path
++// and each split chunk so their encode settings stay byte-identical.
++func buildOutputArgs(encoderName string, filters, encOptions []string, outPath string) []string {
++	var options []string
+ 
+-	switch outputFormat {
+-	case "yuv420p":
+-		parsedFormat = pixconv.I420
+-	case "yuv444p":
+-		parsedFormat = pixconv.I444
+-	case "nv12":
+-		parsedFormat = pixconv.NV12
++	if len(filters) > 0 {
++		options = append(options, "-vf", strings.Join(filters, ","))
+ 	}
+ 
+-	var filters []string
++	options = append(options,
++		"-c:v", encoderName,
++		"-color_range", "1",
++		"-colorspace", "1",
++		"-color_trc", "1",
++		"-color_primaries", "1",
++		"-movflags", "+write_colr",
++	)
+ 
+-	inputPixFmt := "rgb24"
+-	if parsedFormat != pixconv.ARGB {
+-		inputPixFmt = outputFormat
+-	} else {
+-		filters = append(filters, "vflip")
++	if parsedFormat == pixconv.ARGB {
++		options = append(options, "-pix_fmt", strings.ToLower(settings.Recording.PixelFormat))
+ 	}
+ 
+-	videoFilters := strings.TrimSpace(settings.Recording.Filters)
+-	if len(videoFilters) > 0 {
+-		filters = append(filters, videoFilters)
++	if encOptions != nil {
++		options = append(options, encOptions...)
+ 	}
+ 
+-	inputName := "-"
+-
+-	if runtime.GOOS != "windows" {
+-		pipe, err := files.NewNamedPipe("")
+-		if err != nil {
+-			panic(err)
+-		}
+-
+-		inputName = pipe.Name()
+-		videoPipe = pipe
+-	}
++	return append(options, outPath)
++}
+ 
++func inputArgs(inputPixFmt, inputName string, fps int) []string {
+ 	options := []string{
+-		"-y",  //(optional) overwrite output file if it exists
+-		"-an", // no audio
++		"-y",
++		"-an",
+ 		"-f", "rawvideo",
+ 		"-c:v", "rawvideo",
+-		"-s", fmt.Sprintf("%dx%d", w, h), //size of one frame
++		"-s", fmt.Sprintf("%dx%d", w, h),
+ 		"-pix_fmt", inputPixFmt,
+-		"-r", strconv.Itoa(fps), //frames per second
++		"-r", strconv.Itoa(fps),
+ 	}
+ 
+ 	if inputPixFmt != "rgb24" {
+@@ -151,42 +203,35 @@ func startVideo(fps, _w, _h int) {
+ 		)
+ 	}
+ 
+-	options = append(options,
+-		"-i", inputName, //The input comes from a videoPipe
+-	)
+-
+-	if len(filters) > 0 {
+-		options = append(options, "-vf", strings.Join(filters, ","))
+-	}
+-
+-	options = append(options,
+-		"-c:v", encoder,
+-		"-color_range", "1",
+-		"-colorspace", "1",
+-		"-color_trc", "1",
+-		"-color_primaries", "1",
+-		"-movflags", "+write_colr",
+-	)
++	return append(options, "-i", inputName)
++}
+ 
+-	if parsedFormat == pixconv.ARGB {
+-		options = append(options, "-pix_fmt", outputFormat)
+-	}
++// spawnFFmpeg starts one ffmpeg subprocess reading rawvideo from a fresh
++// named pipe (or stdin on Windows) and returns the process handle, the pipe
++// to write frames into, and an error-scanner WaitGroup + a pointer to write
++// the detected error into. Shared by both single-encoder and per-chunk use.
++func spawnFFmpeg(encoderName, inputPixFmt string, filters, encOptions []string, fps int, outPath string, errStore *string) (*exec.Cmd, io.WriteCloser, *sync.WaitGroup) {
++	inputName := "-"
++	var pipe io.WriteCloser
+ 
+-	encOptions, err := settings.Recording.GetEncoderOptions().GenerateFFmpegArgs()
+-	if err != nil {
+-		panic(fmt.Sprintf("encoder \"%s\": %s", encoder, err))
+-	} else if encOptions != nil {
+-		options = append(options, encOptions...)
++	if runtime.GOOS != "windows" {
++		np, err := files.NewNamedPipe("")
++		if err != nil {
++			panic(err)
++		}
++		inputName = np.Name()
++		pipe = np
+ 	}
+ 
+-	options = append(options, filepath.Join(settings.Recording.GetOutputDir(), output+"_temp", "video."+settings.Recording.Container))
++	options := append(inputArgs(inputPixFmt, inputName, fps), buildOutputArgs(encoderName, filters, encOptions, outPath)...)
+ 
+ 	log.Println("Running ffmpeg with options:", options)
+ 
+-	cmdVideo = exec.Command(ffmpegExec, options...)
++	cmd := exec.Command(ffmpegExec, options...)
+ 
+ 	if runtime.GOOS == "windows" {
+-		videoPipe, err = cmdVideo.StdinPipe()
++		var err error
++		pipe, err = cmd.StdinPipe()
+ 		if err != nil {
+ 			panic(err)
+ 		}
+@@ -205,50 +250,24 @@ func startVideo(fps, _w, _h int) {
+ 		errList = append(errList, os.Stderr)
+ 	}
+ 
+-	cmdVideo.Stdout = io.MultiWriter(outList...)
+-	cmdVideo.Stderr = io.MultiWriter(errList...)
++	cmd.Stdout = io.MultiWriter(outList...)
++	cmd.Stderr = io.MultiWriter(errList...)
+ 
+-	err = cmdVideo.Start()
+-	if err != nil {
++	if err = cmd.Start(); err != nil {
+ 		panic(fmt.Sprintf("ffmpeg's video process failed to start! Please check if video parameters are entered correctly or video codec is supported by provided container. Error: %s", err))
+ 	}
+ 
+-	freePBOPool = make(chan *PBO, MaxVideoBuffers)
+-
+-	goroutines.CallMain(func() {
+-		if parsedFormat != pixconv.ARGB {
+-			rgbToYuvConverter = effects.NewRGBYUV(w, h, parsedFormat != pixconv.I444 && parsedFormat != pixconv.I422)
+-		}
+-
+-		for i := 0; i < MaxVideoBuffers; i++ {
+-			freePBOPool <- createPBO(parsedFormat)
+-		}
+-
+-		if settings.Recording.MotionBlur.Enabled {
+-			bFrames := settings.Recording.MotionBlur.BlendFrames
+-			blend = effects.NewBlend(w, h, bFrames, calculateWeights(bFrames))
+-		}
+-	})
+-
+-	videoWriteQueue = make(chan *PBO, MaxVideoBuffers)
+-
+-	limiter = frame.NewLimiter(settings.Recording.EncodingFPSCap)
+-
+-	videoErrorWait = &sync.WaitGroup{}
+-	videoErrorWait.Add(1)
++	errWait := &sync.WaitGroup{}
++	errWait.Add(1)
+ 
+ 	goroutines.Run(func() {
+ 		sc := bufio.NewScanner(rFile)
+-
+ 		for sc.Scan() {
+ 			line := sc.Text()
+-
+-			cutIndex := strings.Index(line, "] ") //searching for encoder error
+-
++			cutIndex := strings.Index(line, "] ")
+ 			if cutIndex > -1 {
+ 				cutLine := line[cutIndex+2:]
+ 				lineLower := strings.ToLower(cutLine)
+-
+ 				if strings.Contains(lineLower, "error setting") ||
+ 					strings.Contains(lineLower, "error initializing") ||
+ 					strings.Contains(lineLower, "error creating") ||
+@@ -259,17 +278,101 @@ func startVideo(fps, _w, _h int) {
+ 					strings.Contains(lineLower, "failed") ||
+ 					strings.Contains(lineLower, "no capable devices found") ||
+ 					strings.Contains(lineLower, "does not support") {
+-
+-					videoError = encoder + ": " + cutLine
+-
++					*errStore = encoderName + ": " + cutLine
+ 					oFile.Close()
+ 				}
+ 			}
+ 		}
++		errWait.Done()
++	})
+ 
+-		videoErrorWait.Done()
++	return cmd, pipe, errWait
++}
++
++func startVideo(fps, _w, _h int) {
++	w, h = _w, _h
++
++	if settings.Recording.MotionBlur.Enabled {
++		fps /= settings.Recording.MotionBlur.OversampleMultiplier
++	}
++
++	encoder := strings.ToLower(settings.Recording.Encoder)
++	outputFormat := strings.ToLower(settings.Recording.PixelFormat)
++
++	if strings.HasSuffix(encoder, "_qsv") {
++		outputFormat = "nv12"
++	} else if encoder == "libsvtav1" {
++		outputFormat = "yuv420p"
++	}
++
++	parsedFormat = pixconv.ARGB
++	switch outputFormat {
++	case "yuv420p":
++		parsedFormat = pixconv.I420
++	case "yuv444p":
++		parsedFormat = pixconv.I444
++	case "nv12":
++		parsedFormat = pixconv.NV12
++	}
++
++	var filters []string
++	inputPixFmt := "rgb24"
++	if parsedFormat != pixconv.ARGB {
++		inputPixFmt = outputFormat
++	} else {
++		filters = append(filters, "vflip")
++	}
++
++	if vf := strings.TrimSpace(settings.Recording.Filters); vf != "" {
++		filters = append(filters, vf)
++	}
++
++	encOptions, err := settings.Recording.GetEncoderOptions().GenerateFFmpegArgs()
++	if err != nil {
++		panic(fmt.Sprintf("encoder \"%s\": %s", encoder, err))
++	}
++
++	splitActive = settings.Recording.SplitEncode &&
++		strings.TrimSpace(settings.Recording.SplitEncoderName) != "" &&
++		totalFrameEstimate > splitChunkFrames && // need at least ~2 chunks for splitting to mean anything
++		settings.Recording.SplitRatio > 0 && settings.Recording.SplitRatio < 1
++
++	goroutines.CallMain(func() {
++		if parsedFormat != pixconv.ARGB {
++			rgbToYuvConverter = effects.NewRGBYUV(w, h, parsedFormat != pixconv.I444 && parsedFormat != pixconv.I422)
++		}
++		if settings.Recording.MotionBlur.Enabled {
++			bFrames := settings.Recording.MotionBlur.BlendFrames
++			blend = effects.NewBlend(w, h, bFrames, calculateWeights(bFrames))
++		}
+ 	})
+ 
++	limiter = frame.NewLimiter(settings.Recording.EncodingFPSCap)
++
++	if !splitActive {
++		startVideoSingle(encoder, inputPixFmt, filters, encOptions, fps)
++		return
++	}
++
++	startVideoSplit(encoder, inputPixFmt, filters, encOptions, fps)
++}
++
++// ---- single-encoder path (stock behavior) -----------------------------------
++
++func startVideoSingle(encoder, inputPixFmt string, filters, encOptions []string, fps int) {
++	outPath := filepath.Join(settings.Recording.GetOutputDir(), output+"_temp", "video."+settings.Recording.Container)
++
++	cmdVideo, videoPipe, videoErrorWait = spawnFFmpeg(encoder, inputPixFmt, filters, encOptions, fps, outPath, &videoError)
++
++	freePBOPool = make(chan *PBO, MaxVideoBuffers)
++	goroutines.CallMain(func() {
++		for i := 0; i < MaxVideoBuffers; i++ {
++			freePBOPool <- createPBO(parsedFormat)
++		}
++	})
++
++	videoWriteQueue = make(chan *PBO, MaxVideoBuffers)
++
+ 	endSyncVideo = &sync.WaitGroup{}
+ 	endSyncVideo.Add(1)
+ 
+@@ -277,41 +380,144 @@ func startVideo(fps, _w, _h int) {
+ 		for pbo := range videoWriteQueue {
+ 			if _, err2 := videoPipe.Write(pbo.data); err2 != nil {
+ 				errorMsg := err2.Error()
+-
+ 				videoErrorWait.Wait()
+-
+ 				if videoError != "" {
+ 					errorMsg = videoError
+ 				}
+-
+ 				panic(fmt.Sprintf("ffmpeg's video process finished abruptly! Please check if you have enough storage or video parameters are entered correctly. Error: %s", errorMsg))
+ 			}
+-
+ 			freePBOPool <- pbo
+ 		}
+-
+ 		endSyncVideo.Done()
+ 	})
+ }
+ 
+-func stopVideo() {
+-	log.Println("Waiting for video to finish writing...")
++// ---- split (chunked round-robin) path ---------------------------------------
+ 
+-	checkData(true, true)
++func startVideoSplit(encoder, inputPixFmt string, filters, encOptions []string, fps int) {
++	splitInputPixFmt = inputPixFmt
++	splitFps = fps
+ 
+-	close(videoWriteQueue)
++	primaryEncoderName = encoder
++	primaryEncOptions = encOptions
++	primaryFilters = filters
+ 
+-	endSyncVideo.Wait()
++	secondEncoderName = strings.ToLower(settings.Recording.SplitEncoderName)
++	if s := strings.TrimSpace(settings.Recording.SplitEncoderCustomOptions); s != "" {
++		secondEncOptions = strings.Fields(s)
++	}
++	// The second encoder may need its own extra filter (e.g. hwupload for a
++	// hardware encoder) that the primary must not get -- see recording.go.
++	secondFilters = filters
++	if extra := strings.TrimSpace(settings.Recording.SplitEncoderFilters); extra != "" {
++		secondFilters = append(append([]string{}, filters...), extra)
++	}
+ 
+-	log.Println("Finished! Stopping video pipe...")
++	splitRatioPrimary = settings.Recording.SplitRatio
+ 
+-	_ = videoPipe.Close()
++	// Deep pool: enough to keep splitMaxInFlight chunks' worth of frames
++	// outstanding at once, which is what lets danser render a whole chunk
++	// ahead into one lane while the previous lane's ffmpeg still drains.
++	poolSize := splitChunkFrames * splitMaxInFlight
++	freePBOPool = make(chan *PBO, poolSize)
++	goroutines.CallMain(func() {
++		for i := 0; i < poolSize; i++ {
++			freePBOPool <- createPBO(parsedFormat)
++		}
++	})
++
++	splitInFlight = make(chan struct{}, splitMaxInFlight)
++	splitWG = &sync.WaitGroup{}
+ 
+-	log.Println("Video pipe closed. Waiting for video ffmpeg process to finish...")
++	log.Println(fmt.Sprintf("split-encode: engaged, chunkFrames=%d maxInFlight=%d ratioPrimary=%.2f primary=%q second=%q (~%d chunks)",
++		splitChunkFrames, splitMaxInFlight, splitRatioPrimary, primaryEncoderName, secondEncoderName,
++		(totalFrameEstimate+int64(splitChunkFrames)-1)/int64(splitChunkFrames)))
+ 
+-	_ = cmdVideo.Wait()
++	currentChunk = newChunk(0)
++}
+ 
+-	log.Println("Video process finished.")
++// chunkUsesPrimary distributes chunks between the two lanes to match the
++// throughput ratio: the primary (CPU) lane gets splitRatioPrimary of the
++// chunks, spread evenly rather than front-loaded, so both lanes stay busy
++// from the start (that even spread is what produces the overlap).
++func chunkUsesPrimary(index int) bool {
++	secondBefore := int(float64(index) * (1 - splitRatioPrimary))
++	secondAfter := int(float64(index+1) * (1 - splitRatioPrimary))
++	return secondAfter == secondBefore // this chunk did NOT tick the second-lane counter -> primary
++}
++
++func newChunk(index int) *chunk {
++	splitInFlight <- struct{}{} // block if splitMaxInFlight chunks already draining -> throttles danser to combined encode rate
++
++	c := &chunk{index: index, errorWait: &sync.WaitGroup{}}
++	c.outputName = fmt.Sprintf("chunk_%04d.%s", index, settings.Recording.Container)
++	outPath := filepath.Join(settings.Recording.GetOutputDir(), output+"_temp", c.outputName)
++
++	encName, filters, encOpts := secondEncoderName, secondFilters, secondEncOptions
++	if chunkUsesPrimary(index) {
++		encName, filters, encOpts = primaryEncoderName, primaryFilters, primaryEncOptions
++	}
++	c.encoderName = encName
++
++	c.cmd, c.pipe, c.errorWait = spawnFFmpeg(encName, splitInputPixFmt, filters, encOpts, splitFps, outPath, &c.errorMsg)
++	// writeQueue must be able to hold a whole chunk: checkData (on the GL
++	// thread) blocks when it's full, so a shallow queue would cap how far
++	// danser can render ahead of this chunk's encoder -- which is exactly
++	// the overlap we need. A full chunk buffered here lets danser finish
++	// feeding this (slow) lane and move on to fill the next lane while this
++	// one drains in the background. Sized to splitChunkFrames; the deep PBO
++	// pool (splitChunkFrames*splitMaxInFlight) is what actually backs it.
++	c.writeQueue = make(chan *PBO, splitChunkFrames)
++
++	splitChunks = append(splitChunks, c)
++
++	splitWG.Add(1)
++	goroutines.RunOS(func() {
++		for pbo := range c.writeQueue {
++			if _, err2 := c.pipe.Write(pbo.data); err2 != nil {
++				errorMsg := err2.Error()
++				c.errorWait.Wait()
++				if c.errorMsg != "" {
++					errorMsg = c.errorMsg
++				}
++				panic(fmt.Sprintf("ffmpeg's video process finished abruptly (chunk %d, %s)! Error: %s", c.index, c.encoderName, errorMsg))
++			}
++			freePBOPool <- pbo
++		}
++		// writeQueue closed -> this chunk got all its frames.
++		_ = c.pipe.Close()
++		_ = c.cmd.Wait()
++		<-splitInFlight // free a slot so a later chunk on this lane can start
++		splitWG.Done()
++	})
++
++	return c
++}
++
++func stopVideo() {
++	log.Println("Waiting for video to finish writing...")
++
++	checkData(true, true)
++
++	if !splitActive {
++		close(videoWriteQueue)
++		endSyncVideo.Wait()
++		log.Println("Finished! Stopping video pipe...")
++		_ = videoPipe.Close()
++		log.Println("Video pipe closed. Waiting for video ffmpeg process to finish...")
++		_ = cmdVideo.Wait()
++		log.Println("Video process finished.")
++		return
++	}
++
++	// Split: the final chunk never saw a following owner-change in
++	// checkData (nothing came after it), so close its queue here. All
++	// earlier chunks were already closed at their transitions.
++	if currentChunk != nil {
++		close(currentChunk.writeQueue)
++	}
++	splitWG.Wait()
++	log.Println("split-encode: all chunk processes finished.")
+ }
+ 
+ func PreFrame() {
+@@ -341,34 +547,43 @@ func MakeFrame() {
+ 		blend.Blend()
+ 	}
+ 
++	encodedFrameNumber++
++
++	// Split mode: cross into a new chunk at every splitChunkFrames boundary.
++	// newChunk blocks on the in-flight semaphore, which is the backpressure
++	// that keeps danser from outrunning the encoders unboundedly.
++	if splitActive {
++		wantIndex := int(encodedFrameNumber / int64(splitChunkFrames))
++		if wantIndex != currentChunk.index {
++			currentChunk = newChunk(wantIndex)
++		}
++	}
++
+ 	var yuvFull, yuvHalf []texture.Texture
+ 
+ 	if rgbToYuvConverter != nil {
+ 		rgbToYuvConverter.End()
+-
+ 		yuvFull, yuvHalf = rgbToYuvConverter.Draw()
+ 	}
+ 
+-	checkData(len(freePBOPool) == 0, false) // Force wait for at least one frame to be retrieved if pbo pool is empty
++	checkData(len(freePBOPool) == 0, false)
+ 
+-	pbo := <-freePBOPool // Wait for free PBO
+-
+-	//gl.MemoryBarrier(gl.PIXEL_BUFFER_BARRIER_BIT)
++	pbo := <-freePBOPool
++	if splitActive {
++		pbo.owner = currentChunk
++	}
+ 
+ 	gl.BindBuffer(gl.PIXEL_PACK_BUFFER, pbo.handle)
+-
+ 	gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+ 
+ 	if pbo.convFormat == pixconv.NV12 {
+ 		gl.GetTextureSubImage(yuvFull[0].GetID(), 0, 0, 0, 0, int32(w), int32(h), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h), gl.Ptr(nil))
+-
+ 		gl.GetTextureSubImage(yuvHalf[0].GetID(), 0, 0, 0, 0, int32(w/2), int32(h/2), 1, gl.RG, gl.UNSIGNED_BYTE, int32(w*h/2), gl.PtrOffset(w*h))
+ 	} else if pbo.convFormat == pixconv.I420 {
+ 		gl.GetTextureSubImage(yuvFull[0].GetID(), 0, 0, 0, 0, int32(w), int32(h), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h), gl.Ptr(nil))
+-
+ 		gl.GetTextureSubImage(yuvHalf[0].GetID(), 0, 0, 0, 0, int32(w/2), int32(h/2), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h/4), gl.PtrOffset(w*h))
+ 		gl.GetTextureSubImage(yuvHalf[1].GetID(), 0, 0, 0, 0, int32(w/2), int32(h/2), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h/4), gl.PtrOffset(w*h*5/4))
+-	} else if pbo.convFormat != pixconv.ARGB { //Read as yuv444p
++	} else if pbo.convFormat != pixconv.ARGB {
+ 		gl.GetTextureSubImage(yuvFull[0].GetID(), 0, 0, 0, 0, int32(w), int32(h), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h), gl.Ptr(nil))
+ 		gl.GetTextureSubImage(yuvFull[1].GetID(), 0, 0, 0, 0, int32(w), int32(h), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h), gl.PtrOffset(w*h))
+ 		gl.GetTextureSubImage(yuvFull[2].GetID(), 0, 0, 0, 0, int32(w), int32(h), 1, gl.RED, gl.UNSIGNED_BYTE, int32(w*h), gl.PtrOffset(w*h*2))
+@@ -377,7 +592,6 @@ func MakeFrame() {
+ 	}
+ 
+ 	pbo.sync = gl.FenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
+-
+ 	gl.Flush()
+ 
+ 	frameReadQueue = append(frameReadQueue, pbo)
+@@ -396,7 +610,6 @@ func checkData(waitForFirst, waitForAll bool) { // I tried to do that on another
+ 		if (i == 0 && waitForFirst) || waitForAll {
+ 			for {
+ 				iStat := gl.ClientWaitSync(pbo.sync, 0, gl.TIMEOUT_IGNORED)
+-
+ 				if iStat == gl.ALREADY_SIGNALED || iStat == gl.CONDITION_SATISFIED {
+ 					break
+ 				}
+@@ -410,9 +623,23 @@ func checkData(waitForFirst, waitForAll bool) { // I tried to do that on another
+ 		}
+ 
+ 		gl.DeleteSync(pbo.sync)
+-
+ 		frameReadQueue = frameReadQueue[1:]
+ 
+-		videoWriteQueue <- pbo
++		if !splitActive {
++			videoWriteQueue <- pbo
++			continue
++		}
++
++		// Split: frames are handed off in strict submission order, so when
++		// the owning chunk changes, the previous chunk has just received its
++		// last frame -> close its queue, which lets its writer finish and
++		// free an in-flight slot. This is why chunk writers can safely
++		// `range` their queue: it's closed exactly once, right here (or at
++		// stopVideo for the very last chunk).
++		if splitLastOwner != nil && pbo.owner != splitLastOwner {
++			close(splitLastOwner.writeQueue)
++		}
++		splitLastOwner = pbo.owner
++		pbo.owner.writeQueue <- pbo
+ 	}
+ }
+diff --git a/app/settings/recording.go b/app/settings/recording.go
+index 7c58f87..cdbf82f 100644
+--- a/app/settings/recording.go
++++ b/app/settings/recording.go
+@@ -106,7 +106,14 @@ func initRecording() *recording {
+ 		CustomSettings: &custom{
+ 			CustomOptions: "",
+ 		},
+-		PixelFormat: "yuv420p",
++		// osr split-encode patch: off by default, zero behavior change
++		// unless explicitly enabled. See app/ffmpeg/video.go/ffmpeg.go.
++		SplitEncode:               false,
++		SplitEncoderName:          "",
++		SplitEncoderCustomOptions: "",
++		SplitEncoderFilters:       "",
++		SplitRatio:                0.7,
++		PixelFormat:               "yuv420p",
+ 		Filters:     "",
+ 		AudioCodec:  "aac",
+ 		AACSettings: &aacSettings{
+@@ -163,6 +170,18 @@ type recording struct {
+ 	HEVCAmfSettings     *hevcAmfSettings   `json:"hevc_amf" label:"AMD AMF H.265 (HEVC) Settings" showif:"Encoder=hevc_amf"`
+ 	AV1AmfSettings      *av1AmfSettings    `json:"av1_amf" label:"AMD AMF AV1 Settings" showif:"Encoder=av1_amf"`
+ 	CustomSettings      *custom            `json:"custom" label:"Custom Encoder Settings" showif:"Encoder=!"`
++	// osr split-encode patch: routes the tail SplitRatio..1.0 fraction of
++	// frames (by frame index, not interleaved) to a second, independently
++	// running ffmpeg encoder process instead of the primary Encoder above,
++	// so two mostly-independent hardware resources (e.g. CPU x264 + GPU
++	// VAAPI) encode concurrently instead of one sitting idle. The two
++	// segments are concatenated (stream copy) before the existing
++	// audio mux step in ffmpeg.go. See app/ffmpeg/video.go.
++	SplitEncode               bool
++	SplitEncoderName          string  `label:"Split: second encoder name" tooltip:"Raw ffmpeg -c:v value for the second encoder, e.g. h264_vaapi. Empty disables splitting regardless of SplitEncode."`
++	SplitEncoderCustomOptions string  `label:"Split: second encoder custom ffmpeg options"`
++	SplitEncoderFilters       string  `label:"Split: second encoder extra -vf filter" tooltip:"Appended after the shared Filters above -- e.g. hwupload, needed for the split encoder to be a hardware one like h264_vaapi even when the primary encoder doesn't need it."`
++	SplitRatio                float64 `label:"Split: fraction of frames for the primary encoder" min:"0" max:"1"`
+ 	PixelFormat         string             `combo:"yuv420p|I420,yuv444p|I444,nv12|NV12" showif:"Encoder=!h264_qsv,!hevc_qsv,!libsvtav1"`
+ 	Filters             string             `label:"FFmpeg Video Filters"`
+ 	AudioCodec          string             `combo:"aac|AAC,libmp3lame|MP3,libopus|OPUS,flac|FLAC"`
