@@ -46,9 +46,9 @@ export function relayLog(jobId, line) {
   if (entry) entry.job.log(line);
 }
 
-export function relayStage(jobId, stage, progress) {
+export function relayStage(jobId, stage, progress, extra) {
   const entry = entries.get(jobId);
-  if (entry) entry.job.setStage(stage, progress);
+  if (entry) entry.job.setStage(stage, progress, extra);
 }
 
 // outputPath is already deterministic (dirs.output/<jobId>.<container>,

@@ -38,9 +38,9 @@ class RemoteJob extends EventEmitter {
     console.log(`[${this.id}] ${line}`);
     this._relay({ line });
   }
-  setStage(stage, progress) {
-    console.log(`[${this.id}] stage=${stage} progress=${progress}`);
-    this._relay({ stage, progress });
+  setStage(stage, progress, extra = {}) {
+    console.log(`[${this.id}] stage=${stage} progress=${progress} eta=${extra.eta ?? "-"}`);
+    this._relay({ stage, progress, eta: extra.eta, speed: extra.speed });
   }
   _relay(body) {
     fetch(api(`/jobs/${this.id}/log`), {

@@ -136,12 +136,17 @@ export async function renderReplayToVideo({ job, replayPath, settings }) {
     await runDanser(args, {
       onLine: (line) => {
         job.log(line);
-        const m = line.match(/Progress:\s*(\d+)%/);
+        // danser prints e.g. "Progress: 69%, Speed: 1.91x, ETA: 21s"
+        // (ETA like "21s" or "1m46s"). Speed/ETA are optional in case the
+        // format ever changes -- progress alone still updates the bar.
+        const m = line.match(/Progress:\s*(\d+)%(?:.*?Speed:\s*([\d.]+)x)?(?:.*?ETA:\s*(\S+))?/);
         if (m) {
           const pct = Number(m[1]);
+          const speed = m[2] ? Number(m[2]) : undefined;
+          const eta = m[3] || undefined;
           // Beatmap resolution/download already used ~0-25% of the bar;
           // give the actual encode the remaining span.
-          job.setStage("rendering", 25 + Math.round((pct / 100) * 70));
+          job.setStage("rendering", 25 + Math.round((pct / 100) * 70), { eta, speed });
         }
       },
     });

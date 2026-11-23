@@ -85,8 +85,8 @@ internalRouter.post("/jobs/:id/error", (req, res) => {
 });
 
 internalRouter.post("/jobs/:id/log", (req, res) => {
-  const { line, stage, progress } = req.body || {};
+  const { line, stage, progress, eta, speed } = req.body || {};
   if (typeof line === "string") remoteWorker.relayLog(req.params.id, line);
-  if (typeof stage === "string") remoteWorker.relayStage(req.params.id, stage, progress);
+  if (typeof stage === "string") remoteWorker.relayStage(req.params.id, stage, progress, { eta, speed });
   res.status(204).end();
 });
