@@ -52,6 +52,13 @@ export function buildJobSettings(base, { songsDir, skinsDir, replaysDir, outputD
   cfg.Playfield.Background.FlashToTheBeat = settings.flashToBeat;
   cfg.Playfield.LeadInTime = settings.skipIntro ? 0 : settings.leadInTime;
   cfg.Playfield.FadeOutTime = settings.leadOutTime;
+  // danser's built-in photosensitivity/epilepsy warning shown before the
+  // intro (Playfield.SeizureWarning.Enabled, default true). The nested
+  // struct is always present in danser's generated base settings, but guard
+  // anyway so an older base.json can't throw here.
+  if (cfg.Playfield.SeizureWarning) {
+    cfg.Playfield.SeizureWarning.Enabled = settings.seizureWarning;
+  }
 
   cfg.Gameplay.Boundaries.Enabled = settings.playfieldBoundaries;
   cfg.Gameplay.ScoreBoard.Show = settings.scoreboard;

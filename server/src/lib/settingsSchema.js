@@ -107,6 +107,7 @@ export const GROUPS = [
       { key: "skipIntro", label: "Skip to first object", type: "bool", default: true },
       { key: "leadInTime", label: "Lead-in time (s)", type: "number", min: 0, max: 10, step: 0.5, default: 5, showIf: { skipIntro: false } },
       { key: "leadOutTime", label: "Fade-out time after last object (s)", type: "number", min: 0, max: 10, step: 0.5, default: 5 },
+      { key: "seizureWarning", label: "Show seizure warning intro", type: "bool", default: true, help: "danser plays a photosensitivity/epilepsy warning before the replay. Turn off to skip it and start on the replay directly." },
     ],
   },
   {
@@ -157,8 +158,8 @@ export const GROUPS = [
         options: [
           "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo",
         ].map((v) => ({ value: v, label: v })),
-        default: "faster",
-        help: "Software encoders only (libx264/libx265) -- ignored for VAAPI.",
+        default: "superfast",
+        help: "Software encoders only (libx264/libx265) -- ignored for VAAPI. \"superfast\" measured ~1.9x realtime at 1080p60 vs \"faster\"'s ~1.0x, still keeps B-frames/CABAC (unlike \"ultrafast\", which is faster still but visibly cuts quality) -- see CLAUDE.md Session 8.",
         showIf: { videoCodec: ["libx264", "libx265"] },
       },
       { key: "crf", label: "Quality (CRF/QP, lower = better)", type: "range", min: 0, max: 51, step: 1, default: 16 },
