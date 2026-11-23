@@ -11,7 +11,6 @@ services:
     environment:
       - PORT=8080
       - DATA_DIR=/data
-      - RENDER_CONCURRENCY=1
     volumes:
       - render-data:/data
     restart: unless-stopped

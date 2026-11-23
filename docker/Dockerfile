@@ -49,7 +49,7 @@ FROM node:20-bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    xvfb x11-utils \
+    xvfb x11-utils x11-xserver-utils \
     libgl1 libglx-mesa0 libegl1 libgbm1 mesa-utils \
     libx11-6 libxcursor1 libxrandr2 libxinerama1 libxi6 libxxf86vm1 libxkbcommon0 \
     libgtk-3-0 \

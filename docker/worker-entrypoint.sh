@@ -37,8 +37,9 @@ export DISPLAY="${DISPLAY:-:99}"
 # roll back by unsetting WORKER_DISPLAY_MODE (or setting it back to
 # xvfb-vgl) rather than debugging blind against a dead worker.
 DISPLAY_MODE="${WORKER_DISPLAY_MODE:-xvfb-vgl}"
+DISPLAY_PID=""
 
-if [ "$DISPLAY_MODE" = "xorg" ]; then
+start_xorg() {
   echo "Starting Xorg (WORKER_DISPLAY_MODE=xorg) on $DISPLAY, VT 7 ..."
   # Pinned to VT 7 (the conventional "X session" VT) rather than letting
   # Xorg auto-pick -- it defaults to VT 1, which is normally the host's
@@ -48,35 +49,85 @@ if [ "$DISPLAY_MODE" = "xorg" ]; then
   Xorg "$DISPLAY" vt7 -config /app/xorg-worker.conf -noreset -nolisten tcp -novtswitch -sharevts -logfile /tmp/xorg-worker.log &
   DISPLAY_PID=$!
   unset USE_VIRTUALGL
-else
-  echo "Starting Xvfb + VirtualGL (WORKER_DISPLAY_MODE=xvfb-vgl, the default) on $DISPLAY ..."
+}
+
+start_xvfb() {
+  echo "Starting Xvfb + VirtualGL (xvfb-vgl) on $DISPLAY ..."
   Xvfb "$DISPLAY" -screen 0 "${XVFB_RES:-1920x1080x24}" -nolisten tcp -ac &
   DISPLAY_PID=$!
   # Tells lib/danser.js to run danser under `vglrun -d egl` instead of
   # directly -- see the comment there for why this is necessary at all.
   export USE_VIRTUALGL=1
-fi
+}
+
+wait_for_display() {
+  for i in $(seq 1 20); do
+    if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  xdpyinfo -display "$DISPLAY" >/dev/null 2>&1
+}
+
+# What GLFW itself counts as a monitor: a RandR output that is both
+# connected AND has an active CRTC (xrandr prints a WxH+X+Y geometry for
+# those; a connected-but-unlit output has none). If Xorg comes up with zero
+# such outputs -- real monitor unplugged / powered off / switched to another
+# input, with no video=<connector>:D kernel force in place -- GLFW's
+# GetPrimaryMonitor() returns nil and danser dies on every single job with
+# "panic: invalid memory address or nil pointer dereference" in
+# (*Monitor).GetVideoMode, right after "GLFW Initialized!". The X server
+# being *up* is not enough.
+xorg_has_monitor() {
+  xrandr --query 2>/dev/null | grep -Eq ' connected( primary)? [0-9]+x[0-9]+\+'
+}
+
+stop_display() {
+  kill "$DISPLAY_PID" 2>/dev/null || true
+  wait "$DISPLAY_PID" 2>/dev/null || true
+  # A cleanly-terminated X server removes these itself; sweep anyway so a
+  # slow/unclean exit can't block the replacement server on the same number.
+  n="${DISPLAY#:}"
+  rm -f "/tmp/.X${n}-lock" "/tmp/.X11-unix/X${n}"
+}
 
 cleanup() {
   kill "$DISPLAY_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-for i in $(seq 1 20); do
-  if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
-done
-
-if ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-  echo "FATAL: $DISPLAY_MODE display server never came up on $DISPLAY."
-  if [ "$DISPLAY_MODE" = "xorg" ]; then
+if [ "$DISPLAY_MODE" = "xorg" ]; then
+  start_xorg
+  if ! wait_for_display; then
+    echo "FATAL: xorg display server never came up on $DISPLAY."
     echo "--- /tmp/xorg-worker.log ---"
     cat /tmp/xorg-worker.log 2>/dev/null || echo "(no log file)"
+    exit 1
   fi
+  if ! xorg_has_monitor; then
+    echo "WARNING: Xorg is up on $DISPLAY but has NO connected, active output:"
+    xrandr --query 2>&1 | sed 's/^/  /' || true
+    echo "WARNING: danser cannot run against a monitor-less X server (GLFW has no primary monitor)."
+    echo "WARNING: Falling back to xvfb-vgl so the worker stays in service (slower for libx264 -- see CLAUDE.md Session 6)."
+    echo "WARNING: To get xorg mode back: reconnect/power on the monitor on the GPU's output (or force the connector"
+    echo "WARNING: with a video=<connector>:D kernel boot param), then restart this container."
+    stop_display
+    DISPLAY_MODE="xvfb-vgl"
+    start_xvfb
+  fi
+else
+  start_xvfb
+fi
+
+if ! wait_for_display; then
+  echo "FATAL: $DISPLAY_MODE display server never came up on $DISPLAY."
   exit 1
 fi
+
+# The mode actually in effect (differs from WORKER_DISPLAY_MODE after the
+# fallback above) -- worker.js uses it to pick the right per-job health check.
+export WORKER_EFFECTIVE_DISPLAY_MODE="$DISPLAY_MODE"
 
 if [ "$DISPLAY_MODE" = "xorg" ]; then
   echo "Renderer GL device check (native Xorg, no VirtualGL -- this IS what rendering actually uses):"
