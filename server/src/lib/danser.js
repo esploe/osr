@@ -57,18 +57,15 @@ function runDanser(args, { onLine } = {}) {
 
     child.on("error", (err) => reject(new Error(`Failed to launch danser: ${err.message}`)));
     child.on("close", (code) => {
-      // danser can emit a fatal line (most notably "Beatmap not found,
-      // closing...") and STILL exit 0 -- it treats "I can't match the
-      // replay to a beatmap" as a clean shutdown, not a crash. Checking
-      // only `code === 0` therefore let that resolve as success, and the
-      // pipeline sailed past to fail far downstream on the missing output
-      // file (a cryptic `ENOENT ... open .../<id>.mp4` in worker.js's
-      // readFileSync) instead of reporting the real reason. Treat any
-      // captured fatal line as a failure regardless of exit code so the
-      // job surfaces the actual cause.
-      if (lastFatalLine) reject(new Error(lastFatalLine));
-      else if (code === 0) resolve();
-      else reject(new Error(`danser exited with code ${code}`));
+      // Exit 0 isn't proof a video was made: danser treats "Beatmap not
+      // found, closing..." as a clean shutdown and exits 0 having rendered
+      // nothing. But a matched line on exit 0 isn't proof of failure either
+      // -- "Error connecting to osu!api" is printed at startup and danser
+      // just carries on without the online lookup. So resolve with the last
+      // fatal-looking line and let the caller decide by whether the output
+      // file actually exists (see renderReplayToVideo).
+      if (code === 0) resolve({ lastFatalLine });
+      else reject(new Error(lastFatalLine || `danser exited with code ${code}`));
     });
   });
 }
@@ -137,8 +134,9 @@ export async function renderReplayToVideo({ job, replayPath, settings }) {
 
   job.log(`Running danser: ${args.join(" ")}`);
 
+  const outputPath = path.join(dirs.output, `${job.id}.${settings.container}`);
   try {
-    await runDanser(args, {
+    const { lastFatalLine } = await runDanser(args, {
       onLine: (line) => {
         job.log(line);
         // danser prints e.g. "Progress: 69%, Speed: 1.91x, ETA: 21s"
@@ -155,6 +153,12 @@ export async function renderReplayToVideo({ job, replayPath, settings }) {
         }
       },
     });
+    // danser exited 0 -- the job only succeeded if the video actually
+    // exists. Otherwise report why (e.g. "Beatmap not found, closing...")
+    // instead of letting callers fail later on a bare ENOENT for the file.
+    if (!fs.existsSync(outputPath)) {
+      throw new Error(lastFatalLine || "danser exited without producing a video.");
+    }
   } finally {
     fs.rm(settingsPath, { force: true }, () => {});
   }
