@@ -57,8 +57,18 @@ function runDanser(args, { onLine } = {}) {
 
     child.on("error", (err) => reject(new Error(`Failed to launch danser: ${err.message}`)));
     child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(lastFatalLine || `danser exited with code ${code}`));
+      // danser can emit a fatal line (most notably "Beatmap not found,
+      // closing...") and STILL exit 0 -- it treats "I can't match the
+      // replay to a beatmap" as a clean shutdown, not a crash. Checking
+      // only `code === 0` therefore let that resolve as success, and the
+      // pipeline sailed past to fail far downstream on the missing output
+      // file (a cryptic `ENOENT ... open .../<id>.mp4` in worker.js's
+      // readFileSync) instead of reporting the real reason. Treat any
+      // captured fatal line as a failure regardless of exit code so the
+      // job surfaces the actual cause.
+      if (lastFatalLine) reject(new Error(lastFatalLine));
+      else if (code === 0) resolve();
+      else reject(new Error(`danser exited with code ${code}`));
     });
   });
 }
